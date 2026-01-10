@@ -1,4 +1,0 @@
-# This file is used by Streamlit Cloud to install system packages
-# Leave empty if no system packages are needed
-# Example: git
-
