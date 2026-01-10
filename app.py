@@ -1,12 +1,3 @@
-"""
-Stock Deep-Dive AI - Streamlit Dashboard
-"""
-
-"""
-Stock Deep-Dive AI - Streamlit Dashboard
-Entry point for Streamlit Community Cloud deployment
-"""
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -135,8 +126,8 @@ if run_analysis:
                 
                 analyst = AIAnalyst(api_key, model_name=gemini_model)
                 ai_report = analyst.generate_report(ticker, data, strategy, language=lang_code)
-                ai_score = analyst.calculate_ai_score(data, strategy)
-                verdict = analyst.get_verdict(ai_score)
+                # 리포트에서 Score와 Verdict 추출
+                ai_score, verdict = analyst.extract_score_and_verdict(ai_report)
                 
                 st.session_state.ai_report = ai_report
                 st.session_state.ai_score = ai_score

@@ -3,9 +3,10 @@ AIAnalyst: Google Gemini API를 활용한 주식 분석 리포트 생성 클래�
 """
 
 import google.generativeai as genai
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import json
 import pandas as pd
+import re
 
 try:
     # Try absolute import first (when stock is a package)
@@ -44,7 +45,7 @@ class AIAnalyst:
     
     def generate_report(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
         """
-        주식 분석 리포트 생성 (단계별 API 호출)
+        주식 분석 리포트 생성 (단일 API 호출)
         
         Args:
             ticker: 주식 티커 심볼 (예: 'AAPL', 'GOOGL')
@@ -55,68 +56,475 @@ class AIAnalyst:
         Returns:
             Markdown 형식의 분석 리포트
         """
-        import time
-        
         try:
-            report_sections = []
+            print("   Generating unified analysis report (single API call)...")
             
-            # 1. Macro/Industry Analysis
-            print("   [1/4] Macro/Industry Analysis...")
-            macro_analysis = self._generate_macro_analysis(ticker, data, language)
-            report_sections.append(("## Macro & Industry Analysis", macro_analysis))
-            time.sleep(2)  # API 호출 간 간격
+            # System Prompt 생성
+            system_prompt = self._build_unified_system_prompt(ticker, strategy, language)
             
-            # 2. Forensic Financial Check
-            print("   [2/4] Forensic Financial Check...")
-            forensic_analysis = self._generate_forensic_analysis(ticker, data, language)
-            report_sections.append(("## Forensic Financial Check", forensic_analysis))
-            time.sleep(2)
+            # User Prompt 생성 (구조화된 데이터)
+            user_prompt = self._build_unified_user_prompt(ticker, data, strategy, language)
             
-            # 3. Strategy Fit Assessment
-            print("   [3/4] Strategy Fit Assessment...")
-            strategy_analysis = self._generate_strategy_analysis(ticker, data, strategy, language)
-            report_sections.append(("## Strategy Fit Assessment", strategy_analysis))
-            time.sleep(2)
+            # 단일 API 호출
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    # Gemini API 호출
+                    response = self.model.generate_content([
+                        system_prompt,
+                        user_prompt
+                    ])
+                    
+                    report = response.text
+                    
+                    # 리포트 파싱 및 검증
+                    parsed_report = self._parse_and_validate_report(report, language)
+                    
+                    return parsed_report
+                    
+                except Exception as e:
+                    if "429" in str(e) or "quota" in str(e).lower():
+                        if attempt < max_retries - 1:
+                            import time
+                            time.sleep(35)
+                            continue
+                    raise e
             
-            # 4. Technical Timing Analysis & Final Verdict
-            print("   [4/4] Technical Timing & Final Verdict...")
-            timing_analysis = self._generate_timing_verdict(ticker, data, strategy, language)
-            report_sections.append(("## Technical Timing Analysis & Final Verdict", timing_analysis))
-            
-            # 리포트 조합
-            if language == "ko":
-                report = "# 주식 분석 리포트\n\n"
-                report += f"**티커**: {ticker} | **전략**: {strategy}\n\n"
-                report += "---\n\n"
-                # Executive Summary (간단히)
-                profile = data.get('profile', {})
-                report += "## 요약\n\n"
-                report += f"- **회사명**: {profile.get('longName', 'N/A')} ({ticker})\n"
-                report += f"- **섹터**: {profile.get('sector', 'N/A')} | **산업**: {profile.get('industry', 'N/A')}\n"
-                report += f"- **현재가**: ${profile.get('currentPrice', 'N/A')} ({profile.get('changePercent', 'N/A')}%)\n\n"
-                report += "---\n\n"
-            else:
-                report = "# Stock Analysis Report\n\n"
-                report += f"**Ticker**: {ticker} | **Strategy**: {strategy}\n\n"
-                report += "---\n\n"
-                # Executive Summary (간단히)
-                profile = data.get('profile', {})
-                report += "## Executive Summary\n\n"
-                report += f"- **Company**: {profile.get('longName', 'N/A')} ({ticker})\n"
-                report += f"- **Sector**: {profile.get('sector', 'N/A')} | **Industry**: {profile.get('industry', 'N/A')}\n"
-                report += f"- **Current Price**: ${profile.get('currentPrice', 'N/A')} ({profile.get('changePercent', 'N/A')}%)\n\n"
-                report += "---\n\n"
-            
-            # 각 섹션 추가
-            for section_title, section_content in report_sections:
-                report += f"{section_title}\n\n"
-                report += f"{section_content}\n\n"
-                report += "---\n\n"
-            
-            return report
+            return f"# Error Generating Report\n\nAPI call failed after {max_retries} attempts."
             
         except Exception as e:
             return f"# Error Generating Report\n\nAn error occurred: {str(e)}\n\nPlease check your API key and try again."
+    
+    def _build_unified_system_prompt(self, ticker: str, strategy: str, language: str = "en") -> str:
+        """
+        통합 분석을 위한 System Prompt 생성
+        포렌식 기반, 재무지표 1차 근거, 계산 금지 원칙 적용
+        """
+        strategy_mode = "Growth" if "Growth" in strategy or "🚀" in strategy else "Value"
+        
+        if language == "ko":
+            prompt = f"""너는 포렌식 기반 주식 분석 AI다. {ticker} 주식을 분석한다.
+
+## 핵심 원칙 (절대 준수)
+
+1. **재무 지표 1차 근거 원칙**
+   - 제공된 재무 지표를 1차 근거로 반드시 사용한다
+   - 제공되지 않은 재무 데이터를 절대 생성하거나 계산하지 않는다
+   - 지표가 부정적인 경우, 긍정적 서사로 이를 상쇄하지 않는다
+
+2. **보조 해석 요소**
+   - 거시경제/산업/뉴스 컨텍스트는 해석 보정 용도로만 사용한다
+   - 재무 지표와 모순되는 해석을 하지 않는다
+
+3. **데이터 부족 처리**
+   - 데이터가 부족하면 분석 한계를 명확히 명시한다
+   - "N/A" 지표는 "데이터 부족 - 해당 항목 분석 제외"라고 명시한다
+
+4. **계산 금지**
+   - AI는 "계산"이 아닌 "분석"만 수행한다
+   - 이미 계산된 지표값을 해석하고 평가만 한다
+
+## 분석 순서 (반드시 이 순서로 사고하고 출력)
+
+1. Macro & Industry Context (거시경제/산업 맥락)
+2. Forensic Financial Assessment (재무 포렌식 평가)
+3. Strategy Fit Assessment (전략 적합성 평가: {strategy_mode})
+4. Technical Timing & Event Risk (기술적 타이밍 및 이벤트 리스크)
+5. Entry Strategy & Final Verdict (진입 전략 및 최종 판단)
+
+## 판단 규칙 (중요)
+
+- 포렌식 지표 중 경고 신호가 2개 이상이면 Final Rating을 BUY 이상으로 주지 않는다
+- Interest Coverage가 Critical(1.0 미만)이면 무조건 HOLD 또는 SELL
+- 실적 발표 D-Day가 7일 이내이면 "Volatility Warning"을 명시하고 Confidence Level을 1단계 낮춘다
+- Growth 전략인데 CapEx Growth가 Contracting이면 전략 불일치 리스크를 명확히 서술한다
+
+## 출력 포맷 (반드시 이 구조)
+
+# {ticker} 주식 분석 리포트
+
+## 1. Macro & Industry Context
+
+[거시경제 환경 및 산업 동향 분석]
+
+## 2. Forensic Financial Assessment
+
+[재무 포렌식 평가 - 제공된 지표를 1차 근거로 사용]
+
+## 3. Strategy Fit Assessment
+
+[{strategy_mode} 전략 적합성 평가]
+
+## 4. Technical Timing & Event Risk
+
+[기술적 타이밍 및 이벤트 리스크 분석]
+
+## 5. Entry Strategy & Final Verdict
+
+### Suggested Entry Price
+$[구체적인 가격]
+
+### Key Risk Factors
+- [리스크 1]
+- [리스크 2]
+- [리스크 3]
+
+### Final Rating
+**[STRONG BUY / BUY / HOLD / SELL]**
+
+### Confidence Level
+**[High / Medium / Low]**
+
+[최종 판단 근거 및 종합 의견]
+
+---
+**중요**: 모든 분석은 제공된 재무 지표를 1차 근거로 하며, 거시경제/뉴스는 보조 해석 요소일 뿐이다."""
+        else:
+            prompt = f"""You are a forensic-based stock analysis AI. Analyze {ticker} stock.
+
+## Core Principles (MUST FOLLOW)
+
+1. **Financial Metrics First Principle**
+   - Use provided financial metrics as PRIMARY evidence
+   - NEVER generate or calculate financial data that is not provided
+   - When metrics are negative, do NOT compensate with positive narratives
+
+2. **Auxiliary Interpretation Elements**
+   - Macro/industry/news context is for INTERPRETIVE ADJUSTMENT only
+   - Do NOT contradict financial metrics with interpretations
+
+3. **Missing Data Handling**
+   - When data is insufficient, clearly state analysis limitations
+   - For "N/A" metrics, explicitly state "Data Not Available - Analysis Excluded"
+
+4. **No Calculation Rule**
+   - AI performs "ANALYSIS" only, NOT "CALCULATION"
+   - Interpret and evaluate only the provided calculated metrics
+
+## Analysis Order (MUST think and output in this order)
+
+1. Macro & Industry Context
+2. Forensic Financial Assessment
+3. Strategy Fit Assessment ({strategy_mode})
+4. Technical Timing & Event Risk
+5. Entry Strategy & Final Verdict
+
+## Judgment Rules (CRITICAL)
+
+- If 2+ forensic warning signals exist, Final Rating MUST NOT be BUY or higher
+- If Interest Coverage is Critical (<1.0), MUST be HOLD or SELL
+- If Earnings D-Day ≤ 7 days, MUST state "Volatility Warning" and lower Confidence Level by 1 step
+- If Growth strategy but CapEx Growth is Contracting, MUST clearly describe strategy mismatch risk
+
+## Output Format (MUST follow this structure)
+
+# {ticker} Stock Analysis Report
+
+## 1. Macro & Industry Context
+
+[Macroeconomic environment and industry dynamics analysis]
+
+## 2. Forensic Financial Assessment
+
+[Forensic financial evaluation - use provided metrics as PRIMARY evidence]
+
+## 3. Strategy Fit Assessment
+
+[{strategy_mode} strategy fit evaluation]
+
+## 4. Technical Timing & Event Risk
+
+[Technical timing and event risk analysis]
+
+## 5. Entry Strategy & Final Verdict
+
+### Suggested Entry Price
+$[Specific price]
+
+### Key Risk Factors
+- [Risk 1]
+- [Risk 2]
+- [Risk 3]
+
+### Final Rating
+**[STRONG BUY / BUY / HOLD / SELL]**
+
+### Confidence Level
+**[High / Medium / Low]**
+
+[Final judgment rationale and comprehensive opinion]
+
+---
+**IMPORTANT**: All analysis uses provided financial metrics as PRIMARY evidence. Macro/news are auxiliary interpretation elements only."""
+        
+        return prompt
+    
+    def _build_unified_user_prompt(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
+        """
+        통합 분석을 위한 User Prompt 생성
+        구조화된 JSON 형태로 데이터 제공
+        """
+        strategy_mode = "Growth" if "Growth" in strategy or "🚀" in strategy else "Value"
+        
+        # 데이터 구조화
+        profile = data.get('profile', {})
+        financials = data.get('financials', {})
+        technicals = data.get('technicals', {})
+        news_context = data.get('news_context', {})
+        metrics = financials.get('derived_metrics', {}) if financials else {}
+        
+        if language == "ko":
+            prompt = f"""다음은 {ticker} 주식의 분석 데이터다. 위에서 제시한 원칙과 순서에 따라 종합 분석 리포트를 작성하라.
+
+---
+
+## 기본 정보
+
+- 티커: {ticker}
+- 회사명: {profile.get('longName', 'N/A')}
+- 섹터: {profile.get('sector', 'N/A')}
+- 산업: {profile.get('industry', 'N/A')}
+- 국가: {profile.get('country', 'N/A')}
+- 시가총액: ${format_number(profile.get('marketCap', 'N/A'))}
+- 현재가: ${profile.get('currentPrice', 'N/A')}
+- 변동률: {profile.get('changePercent', 'N/A')}%
+- 베타: {profile.get('beta', 'N/A')}
+- 투자 전략: {strategy_mode}
+
+---
+
+## 재무 포렌식 지표 (1차 근거)
+
+다음 지표값은 이미 계산되어 제공된다. 계산하지 말고 해석만 하라.
+
+- **Quality of Earnings (OCF/순이익)**: {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')} (추세: {metrics.get('quality_of_earnings', {}).get('trend', 'N/A')})
+  - 경고: {metrics.get('quality_of_earnings', {}).get('warning', False)}
+  
+- **Receivables Turnover (매출채권 회전율)**: {metrics.get('receivables_turnover', {}).get('latest', 'N/A')} (추세: {metrics.get('receivables_turnover', {}).get('trend', 'N/A')})
+  
+- **Inventory Turnover (재고 회전율)**: {metrics.get('inventory_turnover', {}).get('latest', 'N/A')} (추세: {metrics.get('inventory_turnover', {}).get('trend', 'N/A')})
+  
+- **Interest Coverage Ratio (이자보상배율)**: {metrics.get('interest_coverage', {}).get('latest', 'N/A')} (상태: {metrics.get('interest_coverage', {}).get('status', 'N/A')})
+  
+- **CapEx Growth (자본지출 성장률)**: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (추세: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
+  
+- **Net Buyback Yield (순 자사주 매입 수익률)**: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (상태: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
+
+**중요**: "N/A" 값은 계산 불가능한 지표다. 해당 항목은 분석에서 제외하되, 한계를 명시하라.
+
+---
+
+## 기술적 지표
+
+- **RSI(14)**: {technicals.get('current_rsi', 'N/A')}
+  - {f"과매수 (>70)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') > 70 else f"과매도 (<30)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') < 30 else "정상 범위"}
+  
+- **TRIX(30)**: {technicals.get('current_trix', 'N/A')} (신호: {technicals.get('current_trix_signal', 'N/A')})
+  
+- **이동평균**: 20일=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60일=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120일=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
+  
+- **거래량 비율**: {technicals.get('volume_ratio', 'N/A')}
+  
+- **다음 실적 발표**: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
+  - {"⚠️ 실적 발표 7일 이내 - 변동성 경고 필요" if technicals.get('earnings_d_day') is not None and technicals.get('earnings_d_day') <= 7 else ""}
+
+---
+
+## 보조 해석 요소 (거시경제/산업/뉴스)
+
+### 최근 뉴스 (Top 3)
+"""
+            recent_news = news_context.get('recent_news', [])[:3] if news_context else []
+            if recent_news:
+                for i, news in enumerate(recent_news, 1):
+                    prompt += f"{i}. {news.get('title', 'N/A')} ({news.get('publisher', 'N/A')}, {news.get('publishTime', 'N/A')})\n"
+            else:
+                prompt += "뉴스 데이터 없음\n"
+            
+            prompt += """
+### 주요 변동일 이벤트 (Top 5)
+"""
+            historical_events = news_context.get('historical_events', [])[:5] if news_context else []
+            if historical_events:
+                for i, event in enumerate(historical_events, 1):
+                    prompt += f"{i}. {event.get('date', 'N/A')}: {event.get('change_pct', 'N/A')}% (종가: ${event.get('close_price', 'N/A')})\n"
+            else:
+                prompt += "이벤트 데이터 없음\n"
+            
+            prompt += """
+---
+
+위 데이터를 바탕으로 System Prompt의 원칙과 순서에 따라 종합 분석 리포트를 작성하라.
+재무 지표를 1차 근거로 사용하고, 거시경제/뉴스는 보조 해석 요소로만 활용하라."""
+        else:
+            prompt = f"""Below is the analysis data for {ticker} stock. Generate a comprehensive analysis report following the principles and order specified above.
+
+---
+
+## Basic Information
+
+- Ticker: {ticker}
+- Company Name: {profile.get('longName', 'N/A')}
+- Sector: {profile.get('sector', 'N/A')}
+- Industry: {profile.get('industry', 'N/A')}
+- Country: {profile.get('country', 'N/A')}
+- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
+- Current Price: ${profile.get('currentPrice', 'N/A')}
+- Change %: {profile.get('changePercent', 'N/A')}%
+- Beta: {profile.get('beta', 'N/A')}
+- Investment Strategy: {strategy_mode}
+
+---
+
+## Forensic Financial Metrics (PRIMARY EVIDENCE)
+
+The following metrics are already calculated and provided. DO NOT calculate - interpret only.
+
+- **Quality of Earnings (OCF/Net Income)**: {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')} (Trend: {metrics.get('quality_of_earnings', {}).get('trend', 'N/A')})
+  - Warning: {metrics.get('quality_of_earnings', {}).get('warning', False)}
+  
+- **Receivables Turnover**: {metrics.get('receivables_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('receivables_turnover', {}).get('trend', 'N/A')})
+  
+- **Inventory Turnover**: {metrics.get('inventory_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('inventory_turnover', {}).get('trend', 'N/A')})
+  
+- **Interest Coverage Ratio**: {metrics.get('interest_coverage', {}).get('latest', 'N/A')} (Status: {metrics.get('interest_coverage', {}).get('status', 'N/A')})
+  
+- **CapEx Growth**: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (Trend: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
+  
+- **Net Buyback Yield**: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (Status: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
+
+**IMPORTANT**: "N/A" values indicate uncalculable metrics. Exclude from analysis but clearly state the limitation.
+
+---
+
+## Technical Indicators
+
+- **RSI(14)**: {technicals.get('current_rsi', 'N/A')}
+  - {f"Overbought (>70)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') > 70 else f"Oversold (<30)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') < 30 else "Normal Range"}
+  
+- **TRIX(30)**: {technicals.get('current_trix', 'N/A')} (Signal: {technicals.get('current_trix_signal', 'N/A')})
+  
+- **Moving Averages**: 20d=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60d=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120d=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
+  
+- **Volume Ratio**: {technicals.get('volume_ratio', 'N/A')}
+  
+- **Next Earnings**: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
+  - {"⚠️ Earnings within 7 days - Volatility Warning Required" if technicals.get('earnings_d_day') is not None and technicals.get('earnings_d_day') <= 7 else ""}
+
+---
+
+## Auxiliary Interpretation Elements (Macro/Industry/News)
+
+### Recent News (Top 3)
+"""
+            recent_news = news_context.get('recent_news', [])[:3] if news_context else []
+            if recent_news:
+                for i, news in enumerate(recent_news, 1):
+                    prompt += f"{i}. {news.get('title', 'N/A')} ({news.get('publisher', 'N/A')}, {news.get('publishTime', 'N/A')})\n"
+            else:
+                prompt += "No news data available\n"
+            
+            prompt += """
+### Top Volatile Dates (Top 5)
+"""
+            historical_events = news_context.get('historical_events', [])[:5] if news_context else []
+            if historical_events:
+                for i, event in enumerate(historical_events, 1):
+                    prompt += f"{i}. {event.get('date', 'N/A')}: {event.get('change_pct', 'N/A')}% (Close: ${event.get('close_price', 'N/A')})\n"
+            else:
+                prompt += "No event data available\n"
+            
+            prompt += """
+---
+
+Based on the above data, generate a comprehensive analysis report following the principles and order in the System Prompt.
+Use financial metrics as PRIMARY evidence. Use macro/news as auxiliary interpretation elements only."""
+        
+        return prompt
+    
+    def _parse_and_validate_report(self, report: str, language: str = "en") -> str:
+        """
+        리포트를 파싱하고 검증하여 섹션별 구조 확인
+        
+        Args:
+            report: AI가 생성한 리포트 텍스트
+            language: 리포트 언어
+        
+        Returns:
+            검증된 리포트 텍스트
+        """
+        required_sections = [
+            "## 1. Macro & Industry Context",
+            "## 2. Forensic Financial Assessment",
+            "## 3. Strategy Fit Assessment",
+            "## 4. Technical Timing & Event Risk",
+            "## 5. Entry Strategy & Final Verdict"
+        ]
+        
+        # 섹션 존재 여부 확인
+        missing_sections = []
+        for section in required_sections:
+            if section not in report:
+                missing_sections.append(section)
+        
+        # Final Verdict 필수 요소 확인
+        has_entry_price = "Suggested Entry Price" in report or "Suggested Entry" in report
+        has_rating = any(rating in report.upper() for rating in ["STRONG BUY", "BUY", "HOLD", "SELL"])
+        has_confidence = any(conf in report for conf in ["Confidence Level", "High", "Medium", "Low"])
+        
+        # 경고 메시지 생성 (필요시) - 디버깅용
+        warnings = []
+        if missing_sections:
+            warnings.append(f"Missing sections: {', '.join(missing_sections)}")
+        if not has_entry_price:
+            warnings.append("Missing: Suggested Entry Price")
+        if not has_rating:
+            warnings.append("Missing: Final Rating")
+        if not has_confidence:
+            warnings.append("Missing: Confidence Level")
+        
+        # 리포트 반환 (경고가 있어도 원본 반환, 향후 개선 가능)
+        # 실제 운영 환경에서는 warnings를 로깅하거나 사용자에게 표시할 수 있음
+        if warnings:
+            # 로깅만 하고 리포트는 그대로 반환 (디버깅 편의성)
+            print(f"⚠️ Report validation warnings: {' | '.join(warnings)}")
+        
+        return report
+    
+    def parse_report_sections(self, report: str) -> Dict[str, str]:
+        """
+        리포트를 섹션별로 파싱하여 반환 (디버깅 및 분석용)
+        
+        Args:
+            report: 생성된 리포트 텍스트
+        
+        Returns:
+            섹션별 텍스트를 담은 딕셔너리
+        """
+        
+        sections = {
+            "macro": "",
+            "forensic": "",
+            "strategy": "",
+            "technical": "",
+            "verdict": ""
+        }
+        
+        # 섹션별 정규식 패턴
+        patterns = {
+            "macro": r'##\s*1\.\s*Macro\s+&\s+Industry\s+Context(.*?)(?=##\s*2\.|$)',
+            "forensic": r'##\s*2\.\s*Forensic\s+Financial\s+Assessment(.*?)(?=##\s*3\.|$)',
+            "strategy": r'##\s*3\.\s*Strategy\s+Fit\s+Assessment(.*?)(?=##\s*4\.|$)',
+            "technical": r'##\s*4\.\s*Technical\s+Timing\s+&\s+Event\s+Risk(.*?)(?=##\s*5\.|$)',
+            "verdict": r'##\s*5\.\s*Entry\s+Strategy\s+&\s+Final\s+Verdict(.*?)$'
+        }
+        
+        for key, pattern in patterns.items():
+            match = re.search(pattern, report, re.DOTALL | re.IGNORECASE)
+            if match:
+                sections[key] = match.group(1).strip()
+        
+        return sections
     
     def _build_system_prompt(self, ticker: str, data: Dict[str, Any], strategy: str) -> str:
         """
@@ -307,401 +715,102 @@ Your role combines:
         
         return prompt
     
-    def _generate_macro_analysis(self, ticker: str, data: Dict[str, Any], language: str = "en") -> str:
-        """Macro/Industry 분석 생성"""
-        import time
-        
-        profile = data.get('profile', {})
-        
-        if language == "ko":
-            prompt = f"""다음 기업의 거시경제 환경과 산업 동향을 분석해주세요: {ticker}
-
-기업 정보:
-- 회사명: {profile.get('longName', 'N/A')}
-- 섹터: {profile.get('sector', 'N/A')}
-- 산업: {profile.get('industry', 'N/A')}
-- 국가: {profile.get('country', 'N/A')}
-- 시가총액: ${format_number(profile.get('marketCap', 'N/A'))}
-- 베타: {profile.get('beta', 'N/A')}
-
-다음 항목에 대해 분석해주세요:
-1. 해당 국가/산업에 관련된 거시경제 요인 (금리, 환율 영향)
-2. 산업 경쟁 구도 및 시장 포지션
-3. 회사의 경쟁 우위(Moat) 및 가치 사슬 위치
-
-한국어로 마크다운 형식으로 출력해주세요. 간결하지만 포괄적으로 작성해주세요."""
-        else:
-            prompt = f"""Analyze the macroeconomic environment and industry dynamics for {ticker}.
-
-Company Information:
-- Name: {profile.get('longName', 'N/A')}
-- Sector: {profile.get('sector', 'N/A')}
-- Industry: {profile.get('industry', 'N/A')}
-- Country: {profile.get('country', 'N/A')}
-- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
-- Beta: {profile.get('beta', 'N/A')}
-
-Provide analysis on:
-1. Macroeconomic factors (interest rates, currency impacts) relevant to this country/industry
-2. Industry competitive landscape and market position
-3. Company's moat and value chain position
-
-Output in English, Markdown format. Be concise but comprehensive."""
-        
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                response = self.model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                if "429" in str(e) or "quota" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        time.sleep(35)
-                        continue
-                return safe_execute(
-                    lambda: "*Macro analysis unavailable due to API limitations.*",
-                    "*Macro analysis unavailable.*",
-                    f"Error in macro analysis for {ticker}",
-                    log_error=True
-                )
-        return "*Macro analysis unavailable.*"
     
-    def _generate_forensic_analysis(self, ticker: str, data: Dict[str, Any], language: str = "en") -> str:
-        """Forensic Financial Check 생성"""
-        import time
-        
-        financials = data.get('financials', {})
-        metrics = financials.get('derived_metrics', {})
-        
-        if language == "ko":
-            prompt = f"""다음 기업의 재무 포렌식 분석을 수행해주세요: {ticker}
-
-재무 지표:
-- 이익의 질 (OCF/순이익): {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')} (추세: {metrics.get('quality_of_earnings', {}).get('trend', 'N/A')})
-- 매출채권 회전율: {metrics.get('receivables_turnover', {}).get('latest', 'N/A')} (추세: {metrics.get('receivables_turnover', {}).get('trend', 'N/A')})
-- 재고 회전율: {metrics.get('inventory_turnover', {}).get('latest', 'N/A')} (추세: {metrics.get('inventory_turnover', {}).get('trend', 'N/A')})
-- 이자보상배율: {metrics.get('interest_coverage', {}).get('latest', 'N/A')} (상태: {metrics.get('interest_coverage', {}).get('status', 'N/A')})
-- 자본지출 성장률: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (추세: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
-- 순 자사주 매입 수익률: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (상태: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-
-중요: 지표가 "N/A"인 경우, "데이터 부족으로 일부 포렌식 분석이 제외됨"이라고 명시해주세요.
-
-다음 항목을 평가해주세요:
-1. 이익의 질 및 잠재적 회계 부정 가능성
-2. 활동성 비율 추세 (회전율 하락 = 위험)
-3. 재무 안정성
-4. 경고 신호 또는 우려사항
-
-한국어로 마크다운 형식으로 출력해주세요. 간결하게 작성해주세요."""
-        else:
-            prompt = f"""Perform forensic financial analysis for {ticker}.
-
-Financial Metrics:
-- Quality of Earnings (OCF/Net Income): {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')} (Trend: {metrics.get('quality_of_earnings', {}).get('trend', 'N/A')})
-- Receivables Turnover: {metrics.get('receivables_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('receivables_turnover', {}).get('trend', 'N/A')})
-- Inventory Turnover: {metrics.get('inventory_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('inventory_turnover', {}).get('trend', 'N/A')})
-- Interest Coverage Ratio: {metrics.get('interest_coverage', {}).get('latest', 'N/A')} (Status: {metrics.get('interest_coverage', {}).get('status', 'N/A')})
-- CapEx Growth: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (Trend: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
-- Net Buyback Yield: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (Status: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-
-IMPORTANT: If any metric shows "N/A", explicitly state "Data Not Available - Some forensic analysis excluded due to missing data".
-
-Evaluate:
-1. Earnings quality and potential accounting irregularities
-2. Activity ratios trends (declining turnover = risk)
-3. Financial stability
-4. Red flags or concerns
-
-Output in English, Markdown format. Be concise."""
-        
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                response = self.model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                if "429" in str(e) or "quota" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        time.sleep(35)
-                        continue
-                return safe_execute(
-                    lambda: "*Forensic analysis unavailable due to API limitations.*",
-                    "*Forensic analysis unavailable.*",
-                    f"Error in forensic analysis for {ticker}",
-                    log_error=True
-                )
-        return "*Forensic analysis unavailable.*"
-    
-    def _generate_strategy_analysis(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
-        """Strategy Fit Assessment 생성"""
-        import time
-        
-        strategy_mode = "Growth" if "Growth" in strategy or "🚀" in strategy else "Value"
-        financials = data.get('financials', {})
-        metrics = financials.get('derived_metrics', {})
-        profile = data.get('profile', {})
-        
-        if language == "ko":
-            prompt = f"""다음 기업이 {strategy_mode} 투자 전략에 적합한지 평가해주세요: {ticker}
-
-회사: {profile.get('longName', 'N/A')}
-현재 전략 모드: {strategy_mode}
-
-주요 지표:
-- 자본지출 성장률: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (추세: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
-- 순 자사주 매입 수익률: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (상태: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-- 시가총액: ${format_number(profile.get('marketCap', 'N/A'))}
-"""
-            
-            if strategy_mode == "Growth":
-                prompt += """
-다음 항목에 집중해주세요:
-- 매출 성장 추세
-- 자본지출 확장
-- 시장 점유율 잠재력
-- 혁신/R&D 투자
-"""
-            else:
-                prompt += """
-다음 항목에 집중해주세요:
-- 자유현금흐름 창출
-- 배당 수익률
-- 자사주 매입 프로그램
-- 부채 감소
-- 밸류에이션 지표
-"""
-            
-            prompt += "\n한국어로 마크다운 형식으로 출력해주세요. 간결하게 작성해주세요."
-        else:
-            prompt = f"""Assess {ticker} fit for {strategy_mode} investment strategy.
-
-Company: {profile.get('longName', 'N/A')}
-Current Strategy Mode: {strategy_mode}
-
-Key Metrics:
-- CapEx Growth: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (Trend: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
-- Net Buyback Yield: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (Status: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
-"""
-            
-            if strategy_mode == "Growth":
-                prompt += """
-Focus on:
-- Revenue growth trends
-- Capital expenditure expansion
-- Market share potential
-- Innovation/R&D investment
-"""
-            else:
-                prompt += """
-Focus on:
-- Free Cash Flow generation
-- Dividend yield
-- Share buyback programs
-- Debt reduction
-- Valuation metrics
-"""
-            
-            prompt += "\nOutput in English, Markdown format. Be concise."
-        
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                response = self.model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                if "429" in str(e) or "quota" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        time.sleep(35)
-                        continue
-                return safe_execute(
-                    lambda: "*Strategy analysis unavailable due to API limitations.*",
-                    "*Strategy analysis unavailable.*",
-                    f"Error in strategy analysis for {ticker}",
-                    log_error=True
-                )
-        return "*Strategy analysis unavailable.*"
-    
-    def _generate_timing_verdict(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
-        """Technical Timing Analysis & Final Verdict 생성"""
-        import time
-        
-        technicals = data.get('technicals', {})
-        news_context = data.get('news_context', {})
-        profile = data.get('profile', {})
-        
-        if language == "ko":
-            prompt = f"""다음 기업의 기술적 타이밍 분석 및 최종 투자 판단을 제공해주세요: {ticker}
-
-현재가: ${profile.get('currentPrice', 'N/A')}
-
-기술적 지표:
-- RSI(14): {technicals.get('current_rsi', 'N/A')}
-- TRIX(30): {technicals.get('current_trix', 'N/A')} (신호: {technicals.get('current_trix_signal', 'N/A')})
-- 이동평균: 20일=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60일=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120일=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
-- 거래량 비율: {technicals.get('volume_ratio', 'N/A')}
-- 다음 실적 발표: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
-"""
-            
-            if news_context.get('recent_news'):
-                prompt += "\n최근 뉴스 헤드라인:\n"
-                for i, news in enumerate(news_context.get('recent_news', [])[:3], 1):
-                    prompt += f"{i}. {news.get('title', 'N/A')}\n"
-            
-            prompt += """
-다음 항목을 제공해주세요:
-1. 기술적 타이밍 분석 (RSI, TRIX, 이동평균 신호)
-2. 실적 발표 근접 경고 (D-Day ≤ 7일인 경우 "변동성 경고 - 관망 권고")
-3. 구체적인 진입가 제안 ($)
-4. 최종 판단: **강력 매수** / **매수** / **보유** / **매도**
-
-한국어로 마크다운 형식으로 출력해주세요. 간결하고 실행 가능하게 작성해주세요."""
-        else:
-            prompt = f"""Provide technical timing analysis and final investment verdict for {ticker}.
-
-Current Price: ${profile.get('currentPrice', 'N/A')}
-
-Technical Indicators:
-- RSI(14): {technicals.get('current_rsi', 'N/A')}
-- TRIX(30): {technicals.get('current_trix', 'N/A')} (Signal: {technicals.get('current_trix_signal', 'N/A')})
-- MA: 20d=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60d=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120d=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
-- Volume Ratio: {technicals.get('volume_ratio', 'N/A')}
-- Next Earnings: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
-"""
-            
-            if news_context.get('recent_news'):
-                prompt += "\nRecent News Headlines:\n"
-                for i, news in enumerate(news_context.get('recent_news', [])[:3], 1):
-                    prompt += f"{i}. {news.get('title', 'N/A')}\n"
-            
-            prompt += """
-Provide:
-1. Technical timing analysis (RSI, TRIX, MA signals)
-2. Earnings proximity warning (if D-Day ≤ 7, recommend "Volatility Warning - Wait and See")
-3. Specific entry price recommendation ($)
-4. Final verdict: **STRONG BUY** / **BUY** / **HOLD** / **SELL**
-
-Output in English, Markdown format. Be concise and actionable."""
-        
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                response = self.model.generate_content(prompt)
-                return response.text
-            except Exception as e:
-                if "429" in str(e) or "quota" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        time.sleep(35)
-                        continue
-                return safe_execute(
-                    lambda: "*Timing analysis unavailable due to API limitations.*",
-                    "*Timing analysis unavailable.*",
-                    f"Error in timing analysis for {ticker}",
-                    log_error=True
-                )
-        return "*Timing analysis unavailable.*"
-    
-    def calculate_ai_score(self, data: Dict[str, Any], strategy: str) -> int:
+    def extract_score_and_verdict(self, report: str) -> Tuple[int, str]:
         """
-        AI 점수 계산 (0-100)
+        리포트에서 Score와 Verdict 추출
+        리포트의 Final Rating을 기반으로 점수 계산
         
         Args:
-            data: StockDataManager에서 수집한 데이터
-            strategy: 투자 전략 ('Growth' 또는 'Value')
+            report: 생성된 리포트 텍스트
         
         Returns:
-            0-100 사이의 점수
+            (score: int, verdict: str) 튜플
         """
         try:
-            score = 50  # 기본 점수
             
-            financials = data.get('financials', {})
-            metrics = financials.get('derived_metrics', {})
-            technicals = data.get('technicals', {})
+            # Verdict 추출 (Final Rating 섹션에서 찾기)
+            verdict = None
+            report_upper = report.upper()
             
-            # Quality of Earnings 점수
-            qoe = metrics.get('quality_of_earnings', {})
-            if qoe.get('latest') != 'N/A':
-                qoe_value = qoe.get('latest', 1.0)
-                if qoe_value >= 1.2:
-                    score += 10
-                elif qoe_value >= 1.0:
-                    score += 5
-                elif qoe_value < 0.8:
-                    score -= 10
+            # "Final Rating" 섹션 찾기
+            final_rating_match = re.search(
+                r'(?:final\s+rating|final\s+verdict)[:\*\s]*\*?\*?([A-Z\s]+)\*?\*?',
+                report_upper,
+                re.IGNORECASE | re.MULTILINE
+            )
             
-            # Interest Coverage 점수
-            ic = metrics.get('interest_coverage', {})
-            if ic.get('latest') != 'N/A':
-                ic_value = ic.get('latest', 0)
-                if ic_value >= 5.0:
-                    score += 10
-                elif ic_value >= 1.0:
-                    score += 5
+            if final_rating_match:
+                rating_text = final_rating_match.group(1).strip()
+                if "STRONG" in rating_text and "BUY" in rating_text:
+                    verdict = "🟢 STRONG BUY"
+                    score = 85
+                elif "BUY" in rating_text:
+                    verdict = "🟢 BUY"
+                    score = 70
+                elif "HOLD" in rating_text:
+                    verdict = "🟡 HOLD"
+                    score = 50
+                elif "SELL" in rating_text:
+                    verdict = "🔴 SELL"
+                    score = 30
+            else:
+                # Final Rating 섹션을 못 찾은 경우, 전체 리포트에서 검색
+                if "**STRONG BUY**" in report or "STRONG BUY" in report_upper:
+                    verdict = "🟢 STRONG BUY"
+                    score = 85
+                elif "**BUY**" in report or (report_upper.find("FINAL RATING") != -1 and "BUY" in report_upper):
+                    verdict = "🟢 BUY"
+                    score = 70
+                elif "**HOLD**" in report or "HOLD" in report_upper:
+                    verdict = "🟡 HOLD"
+                    score = 50
+                elif "**SELL**" in report or "SELL" in report_upper:
+                    verdict = "🔴 SELL"
+                    score = 30
                 else:
+                    # Verdict를 찾을 수 없는 경우 기본값
+                    verdict = "🟡 HOLD"
+                    score = 50
+            
+            # Confidence Level에 따라 점수 조정
+            confidence_match = re.search(
+                r'confidence\s+level[:\s]*\*?\*?([A-Z]+)\*?\*?',
+                report_upper,
+                re.IGNORECASE | re.MULTILINE
+            )
+            
+            if confidence_match:
+                confidence = confidence_match.group(1).strip()
+                if "LOW" in confidence:
                     score -= 10
-            
-            # RSI 점수
-            if technicals.get('current_rsi') != 'N/A':
-                rsi = technicals.get('current_rsi', 50)
-                if 30 <= rsi <= 70:
-                    score += 5
-                elif rsi < 30:
-                    score += 10  # Oversold = 매수 기회
-                elif rsi > 70:
-                    score -= 5  # Overbought
-            
-            # Earnings D-Day 점수
-            earnings_d_day = technicals.get('earnings_d_day')
-            if earnings_d_day is not None:
-                if earnings_d_day > 7:
-                    score += 5  # Earnings가 멀면 안정적
-                elif earnings_d_day <= 7:
-                    score -= 5  # Earnings가 가까우면 변동성 위험
-            
-            # Strategy별 점수
-            strategy_mode = "Growth" if "Growth" in strategy or "🚀" in strategy else "Value"
-            
-            if strategy_mode == "Growth":
-                capex = metrics.get('capex_growth', {})
-                if capex.get('latest') != 'N/A':
-                    capex_value = capex.get('latest', 0)
-                    if capex_value > 0:
-                        score += 5
-            else:  # Value
-                buyback = metrics.get('net_buyback_yield', {})
-                if buyback.get('latest') != 'N/A' and buyback.get('status') == 'Positive':
+                elif "HIGH" in confidence:
                     score += 5
             
-            # 점수 범위 제한 (0-100)
+            # 점수 범위 제한
             score = max(0, min(100, score))
             
-            return score
+            return score, verdict
             
         except Exception as e:
             return safe_execute(
-                lambda: 50,
-                50,
-                "Error calculating AI score",
+                lambda: (50, "🟡 HOLD"),
+                (50, "🟡 HOLD"),
+                f"Error extracting score and verdict: {str(e)}",
                 log_error=True
             )
     
+    def calculate_ai_score(self, data: Dict[str, Any], strategy: str) -> int:
+        """
+        [Deprecated] 리포트 기반 점수 추출 사용 권장
+        호환성을 위해 유지하지만, extract_score_and_verdict 사용 권장
+        """
+        return 50  # 기본값 반환
+    
     def get_verdict(self, score: int) -> str:
         """
-        점수 기반 최종 판단
-        
-        Args:
-            score: AI 점수 (0-100)
-        
-        Returns:
-            'STRONG BUY', 'BUY', 'HOLD', 'SELL'
+        [Deprecated] 리포트 기반 verdict 추출 사용 권장
+        호환성을 위해 유지하지만, extract_score_and_verdict 사용 권장
         """
-        if score >= 80:
-            return "🟢 STRONG BUY"
-        elif score >= 65:
-            return "🟢 BUY"
-        elif score >= 45:
-            return "🟡 HOLD"
-        else:
-            return "🔴 SELL"
+        return "🟡 HOLD"  # 기본값 반환
 
