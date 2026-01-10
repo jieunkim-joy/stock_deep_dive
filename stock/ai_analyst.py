@@ -6,7 +6,17 @@ import google.generativeai as genai
 from typing import Dict, Any, Optional
 import json
 import pandas as pd
-from utils import format_number, safe_execute
+
+try:
+    # Try absolute import first (when stock is a package)
+    from stock.utils import format_number, safe_execute
+except ImportError:
+    # Fallback to relative import (when running from stock directory)
+    try:
+        from .utils import format_number, safe_execute
+    except ImportError:
+        # Final fallback: direct import (when stock is in sys.path)
+        from utils import format_number, safe_execute
 
 
 class AIAnalyst:
