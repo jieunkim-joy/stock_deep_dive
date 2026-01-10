@@ -6,6 +6,7 @@ import google.generativeai as genai
 from typing import Dict, Any, Optional
 import json
 import pandas as pd
+from utils import format_number, safe_execute
 
 
 class AIAnalyst:
@@ -199,7 +200,7 @@ Your role combines:
             prompt += f"- **Sector**: {profile.get('sector', 'N/A')}\n"
             prompt += f"- **Industry**: {profile.get('industry', 'N/A')}\n"
             prompt += f"- **Country**: {profile.get('country', 'N/A')}\n"
-            prompt += f"- **Market Cap**: ${self._format_number(profile.get('marketCap', 'N/A'))}\n"
+            prompt += f"- **Market Cap**: ${format_number(profile.get('marketCap', 'N/A'))}\n"
             prompt += f"- **Current Price**: ${profile.get('currentPrice', 'N/A')}\n"
             prompt += f"- **Change %**: {profile.get('changePercent', 'N/A')}%\n"
             prompt += f"- **Beta**: {profile.get('beta', 'N/A')}\n\n"
@@ -239,11 +240,11 @@ Your role combines:
                 try:
                     if 'Total Revenue' in income_stmt.columns:
                         latest_revenue = income_stmt['Total Revenue'].iloc[0]
-                        prompt += f"- Revenue: ${self._format_number(latest_revenue)}\n"
+                        prompt += f"- Revenue: ${format_number(latest_revenue)}\n"
                     if 'Net Income' in income_stmt.columns:
                         latest_ni = income_stmt['Net Income'].iloc[0]
-                        prompt += f"- Net Income: ${self._format_number(latest_ni)}\n"
-                except:
+                        prompt += f"- Net Income: ${format_number(latest_ni)}\n"
+                except Exception:
                     pass
                 prompt += "\n"
         
@@ -310,7 +311,7 @@ Your role combines:
 - 섹터: {profile.get('sector', 'N/A')}
 - 산업: {profile.get('industry', 'N/A')}
 - 국가: {profile.get('country', 'N/A')}
-- 시가총액: ${self._format_number(profile.get('marketCap', 'N/A'))}
+- 시가총액: ${format_number(profile.get('marketCap', 'N/A'))}
 - 베타: {profile.get('beta', 'N/A')}
 
 다음 항목에 대해 분석해주세요:
@@ -327,7 +328,7 @@ Company Information:
 - Sector: {profile.get('sector', 'N/A')}
 - Industry: {profile.get('industry', 'N/A')}
 - Country: {profile.get('country', 'N/A')}
-- Market Cap: ${self._format_number(profile.get('marketCap', 'N/A'))}
+- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
 - Beta: {profile.get('beta', 'N/A')}
 
 Provide analysis on:
@@ -347,7 +348,12 @@ Output in English, Markdown format. Be concise but comprehensive."""
                     if attempt < max_retries - 1:
                         time.sleep(35)
                         continue
-                return f"*Macro analysis unavailable due to API limitations.*"
+                return safe_execute(
+                    lambda: "*Macro analysis unavailable due to API limitations.*",
+                    "*Macro analysis unavailable.*",
+                    f"Error in macro analysis for {ticker}",
+                    log_error=True
+                )
         return "*Macro analysis unavailable.*"
     
     def _generate_forensic_analysis(self, ticker: str, data: Dict[str, Any], language: str = "en") -> str:
@@ -408,7 +414,12 @@ Output in English, Markdown format. Be concise."""
                     if attempt < max_retries - 1:
                         time.sleep(35)
                         continue
-                return f"*Forensic analysis unavailable due to API limitations.*"
+                return safe_execute(
+                    lambda: "*Forensic analysis unavailable due to API limitations.*",
+                    "*Forensic analysis unavailable.*",
+                    f"Error in forensic analysis for {ticker}",
+                    log_error=True
+                )
         return "*Forensic analysis unavailable.*"
     
     def _generate_strategy_analysis(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
@@ -429,7 +440,7 @@ Output in English, Markdown format. Be concise."""
 주요 지표:
 - 자본지출 성장률: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (추세: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
 - 순 자사주 매입 수익률: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (상태: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-- 시가총액: ${self._format_number(profile.get('marketCap', 'N/A'))}
+- 시가총액: ${format_number(profile.get('marketCap', 'N/A'))}
 """
             
             if strategy_mode == "Growth":
@@ -460,7 +471,7 @@ Current Strategy Mode: {strategy_mode}
 Key Metrics:
 - CapEx Growth: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (Trend: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
 - Net Buyback Yield: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (Status: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
-- Market Cap: ${self._format_number(profile.get('marketCap', 'N/A'))}
+- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
 """
             
             if strategy_mode == "Growth":
@@ -493,7 +504,12 @@ Focus on:
                     if attempt < max_retries - 1:
                         time.sleep(35)
                         continue
-                return f"*Strategy analysis unavailable due to API limitations.*"
+                return safe_execute(
+                    lambda: "*Strategy analysis unavailable due to API limitations.*",
+                    "*Strategy analysis unavailable.*",
+                    f"Error in strategy analysis for {ticker}",
+                    log_error=True
+                )
         return "*Strategy analysis unavailable.*"
     
     def _generate_timing_verdict(self, ticker: str, data: Dict[str, Any], strategy: str, language: str = "en") -> str:
@@ -567,28 +583,13 @@ Output in English, Markdown format. Be concise and actionable."""
                     if attempt < max_retries - 1:
                         time.sleep(35)
                         continue
-                return f"*Timing analysis unavailable due to API limitations.*"
+                return safe_execute(
+                    lambda: "*Timing analysis unavailable due to API limitations.*",
+                    "*Timing analysis unavailable.*",
+                    f"Error in timing analysis for {ticker}",
+                    log_error=True
+                )
         return "*Timing analysis unavailable.*"
-    
-    def _format_number(self, value: Any) -> str:
-        """숫자를 읽기 쉬운 형식으로 포맷팅"""
-        if value == 'N/A' or value is None:
-            return 'N/A'
-        
-        try:
-            num = float(value)
-            if abs(num) >= 1e12:
-                return f"{num/1e12:.2f}T"
-            elif abs(num) >= 1e9:
-                return f"{num/1e9:.2f}B"
-            elif abs(num) >= 1e6:
-                return f"{num/1e6:.2f}M"
-            elif abs(num) >= 1e3:
-                return f"{num/1e3:.2f}K"
-            else:
-                return f"{num:.2f}"
-        except:
-            return str(value)
     
     def calculate_ai_score(self, data: Dict[str, Any], strategy: str) -> int:
         """
@@ -668,8 +669,12 @@ Output in English, Markdown format. Be concise and actionable."""
             return score
             
         except Exception as e:
-            print(f"Error calculating AI score: {e}")
-            return 50  # 기본값
+            return safe_execute(
+                lambda: 50,
+                50,
+                "Error calculating AI score",
+                log_error=True
+            )
     
     def get_verdict(self, score: int) -> str:
         """
