@@ -19,6 +19,67 @@ from data_manager import StockDataManager
 from ai_analyst import AIAnalyst
 from utils import format_number
 
+
+def _build_chat_context(ticker: str, data: dict, strategy: str, ai_report: str = None) -> str:
+    """
+    AI Chat을 위한 컨텍스트 빌드 함수
+    """
+    profile = data.get('profile', {})
+    financials = data.get('financials', {})
+    technicals = data.get('technicals', {})
+    news_context = data.get('news_context', {})
+    metrics = financials.get('derived_metrics', {}) if financials else {}
+    
+    context = f"""## Company Information
+
+- Ticker: {ticker}
+- Company: {profile.get('longName', 'N/A')}
+- Sector: {profile.get('sector', 'N/A')}
+- Industry: {profile.get('industry', 'N/A')}
+- Country: {profile.get('country', 'N/A')}
+- Market Cap: ${format_number(profile.get('marketCap', 'N/A'))}
+- Current Price: ${profile.get('currentPrice', 'N/A')}
+- Beta: {profile.get('beta', 'N/A')}
+- Investment Strategy: {strategy}
+
+## Financial Metrics
+
+- Quality of Earnings: {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')} (Trend: {metrics.get('quality_of_earnings', {}).get('trend', 'N/A')})
+- Receivables Turnover: {metrics.get('receivables_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('receivables_turnover', {}).get('trend', 'N/A')})
+- Inventory Turnover: {metrics.get('inventory_turnover', {}).get('latest', 'N/A')} (Trend: {metrics.get('inventory_turnover', {}).get('trend', 'N/A')})
+- Interest Coverage: {metrics.get('interest_coverage', {}).get('latest', 'N/A')} (Status: {metrics.get('interest_coverage', {}).get('status', 'N/A')})
+- CapEx Growth: {metrics.get('capex_growth', {}).get('latest', 'N/A')}% (Trend: {metrics.get('capex_growth', {}).get('trend', 'N/A')})
+- Net Buyback Yield: {metrics.get('net_buyback_yield', {}).get('latest', 'N/A')}% (Status: {metrics.get('net_buyback_yield', {}).get('status', 'N/A')})
+
+## Technical Indicators
+
+- RSI(14): {technicals.get('current_rsi', 'N/A')}
+- TRIX(30): {technicals.get('current_trix', 'N/A')} (Signal: {technicals.get('current_trix_signal', 'N/A')})
+- Moving Averages: 20d=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60d=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120d=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
+- Volume Ratio: {technicals.get('volume_ratio', 'N/A')}
+- Next Earnings: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
+
+"""
+    
+    # Recent news summary
+    if news_context and news_context.get('recent_news'):
+        context += "## Recent News Headlines\n"
+        for i, news in enumerate(news_context.get('recent_news', [])[:5], 1):
+            context += f"{i}. {news.get('title', 'N/A')}\n"
+        context += "\n"
+    
+    # AI Report summary (if available)
+    if ai_report:
+        context += f"""## AI Analysis Report Summary
+
+{ai_report[:2000]}...
+
+(The full analysis report is available in the Summary & Analysis tab.)
+
+"""
+    
+    return context
+
 # 페이지 설정
 st.set_page_config(
     page_title="Stock Deep-Dive AI",
@@ -90,6 +151,8 @@ if 'ai_score' not in st.session_state:
     st.session_state.ai_score = None
 if 'verdict' not in st.session_state:
     st.session_state.verdict = None
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
 
 # 분석 실행
 if run_analysis:
@@ -197,14 +260,34 @@ if st.session_state.data:
     st.markdown("---")
     
     # 탭 생성
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Executive Summary", "🌍 Macro & Industry", "💰 Financials", "📊 Technicals", "📊 Raw Data"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Summary & Analysis", "💰 Financials", "📊 Technicals", "📊 Raw Data", "💬 AI Chat"])
     
-    # Tab 1: Executive Summary
+    # Tab 1: Summary & Analysis (통합)
     with tab1:
-        st.header("Executive Summary")
+        st.header("Summary & Analysis")
         
+        # Company Profile 요약 (항상 표시)
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Company", profile.get('longName', 'N/A'))
+            st.caption(f"Sector: {profile.get('sector', 'N/A')}")
+        with col2:
+            current_price = profile.get('currentPrice', 'N/A')
+            change_pct = profile.get('changePercent', 'N/A')
+            st.metric("Current Price", f"${current_price}", f"{change_pct}%")
+            st.caption(f"Industry: {profile.get('industry', 'N/A')}")
+        with col3:
+            st.metric("Market Cap", f"${format_number(profile.get('marketCap', 'N/A'))}")
+            st.caption(f"Country: {profile.get('country', 'N/A')}")
+        with col4:
+            st.metric("Beta", profile.get('beta', 'N/A'))
+            st.caption(f"Strategy: {strategy}")
+        
+        st.markdown("---")
+        
+        # AI 리포트 전체 표시
         if st.session_state.ai_report:
-            # AI 리포트에서 Executive Summary 추출 (간단히 전체 리포트 표시)
+            st.subheader("AI Analysis Report")
             st.markdown(st.session_state.ai_report)
         elif not api_key or not api_key.strip():
             st.info("💡 **AI Report Not Available**\n\nTo view AI-powered analysis and insights, please enter your Gemini API Key in the sidebar and run the analysis again.")
@@ -215,24 +298,20 @@ if st.session_state.data:
             
             col1, col2 = st.columns(2)
             with col1:
-                st.write(f"**Company:** {profile.get('longName', 'N/A')}")
-                st.write(f"**Sector:** {profile.get('sector', 'N/A')}")
-                st.write(f"**Industry:** {profile.get('industry', 'N/A')}")
-                st.write(f"**Market Cap:** ${format_number(profile.get('marketCap', 'N/A'))}")
+                st.write(f"**Quality of Earnings:** {metrics.get('quality_of_earnings', {}).get('latest', 'N/A')}")
+                st.write(f"**Interest Coverage:** {metrics.get('interest_coverage', {}).get('latest', 'N/A')} ({metrics.get('interest_coverage', {}).get('status', 'N/A')})")
             with col2:
-                qoe = metrics.get('quality_of_earnings', {})
-                ic = metrics.get('interest_coverage', {})
-                st.write(f"**Quality of Earnings:** {qoe.get('latest', 'N/A')}")
-                st.write(f"**Interest Coverage:** {ic.get('latest', 'N/A')} ({ic.get('status', 'N/A')})")
-                st.write(f"**Current Price:** ${profile.get('currentPrice', 'N/A')}")
+                st.write(f"**Receivables Turnover:** {metrics.get('receivables_turnover', {}).get('latest', 'N/A')}")
+                st.write(f"**Inventory Turnover:** {metrics.get('inventory_turnover', {}).get('latest', 'N/A')}")
         else:
-            st.info("Run analysis to see the executive summary.")
+            st.info("Run analysis to see the comprehensive analysis report.")
         
-        # Radar Chart (간단한 버전) - 항상 표시 (데이터가 있을 때만)
+        st.markdown("---")
+        
+        # Performance Radar Chart - 항상 표시 (데이터가 있을 때만)
         if st.session_state.data:
             st.subheader("Performance Radar")
             
-            # 간단한 지표 계산
             financials = data.get('financials', {})
             metrics = financials.get('derived_metrics', {})
             technicals = data.get('technicals', {})
@@ -273,54 +352,9 @@ if st.session_state.data:
             )
             
             st.plotly_chart(fig_radar, use_container_width=True)
-            
-            if not api_key or not api_key.strip():
-                st.caption("💡 Note: Enter your Gemini API Key for AI-powered analysis and investment verdict.")
     
-    # Tab 2: Macro & Industry
+    # Tab 2: Financials
     with tab2:
-        st.header("Macro & Industry Analysis")
-        
-        if st.session_state.ai_report:
-            # AI 리포트에서 Macro 섹션 추출
-            report = st.session_state.ai_report
-            macro_section = ""
-            
-            # Macro 섹션 찾기
-            if "## Macro & Industry Analysis" in report:
-                start_idx = report.find("## Macro & Industry Analysis")
-                end_idx = report.find("---", start_idx + 1)
-                if end_idx == -1:
-                    end_idx = report.find("## Forensic", start_idx + 1)
-                if end_idx != -1:
-                    macro_section = report[start_idx:end_idx]
-                else:
-                    macro_section = report[start_idx:]
-            
-            if macro_section:
-                st.markdown(macro_section)
-            else:
-                st.info("Macro analysis section not found in report.")
-        elif not api_key or not api_key.strip():
-            st.info("💡 **AI-Powered Macro Analysis Not Available**\n\nTo view AI-powered macroeconomic and industry analysis, please enter your Gemini API Key in the sidebar and run the analysis again.")
-            st.markdown("---")
-        
-        # Peer Comparison (간단한 버전) - 항상 표시
-        st.subheader("Company Profile")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**Sector:** {profile.get('sector', 'N/A')}")
-            st.write(f"**Industry:** {profile.get('industry', 'N/A')}")
-            st.write(f"**Country:** {profile.get('country', 'N/A')}")
-        with col2:
-            st.write(f"**Market Cap:** ${format_number(profile.get('marketCap', 'N/A'))}")
-            st.write(f"**Beta:** {profile.get('beta', 'N/A')}")
-        
-        if not api_key or not api_key.strip():
-            st.info("💡 Enter your Gemini API Key to see detailed macro analysis including interest rates, currency impacts, and competitive landscape.")
-    
-    # Tab 3: Financials
-    with tab3:
         st.header("Financial Health")
         
         financials = data.get('financials', {})
@@ -448,7 +482,7 @@ if st.session_state.data:
                         )
                     
                     fig_financials.update_layout(
-                        title="Annual Revenue & Net Income",
+                        title="Revenue & Net Income (Annual)",
                         xaxis_title="Year",
                         yaxis_title="Amount ($)",
                         barmode='group',
@@ -543,7 +577,7 @@ if st.session_state.data:
                     ))
                     
                     fig_cashflow.update_layout(
-                        title="Free Cash Flow vs CapEx",
+                        title="Free Cash Flow vs CapEx (Annual)",
                         xaxis_title="Year",
                         yaxis_title="Amount ($)",
                         height=400
@@ -557,9 +591,199 @@ if st.session_state.data:
                 st.warning(f"Could not create cash flow chart: {str(e)}")
         else:
             st.info("Cash flow data not available.")
+        
+        st.markdown("---")
+        
+        # Quarterly Charts
+        quarterly_data = raw_data.get('quarterly', {})
+        quarterly_status = financials.get('quarterly_data_status', {})
+        
+        if quarterly_status and quarterly_status.get('has_data'):
+            # Quarterly Revenue & Net Income Chart
+            st.subheader("Revenue & Net Income (Quarterly)")
+            
+            if quarterly_data and not quarterly_data.get('income_stmt', pd.DataFrame()).empty:
+                q_income_stmt = quarterly_data['income_stmt']
+                
+                try:
+                    dates = []
+                    q_revenue_data = []
+                    q_net_income_data = []
+                    
+                    # 인덱스에서 날짜 추출 (최신순 정렬)
+                    sorted_dates = sorted(q_income_stmt.index, reverse=True)[:12]  # 최근 12개 쿼터만
+                    
+                    for date in sorted_dates:
+                        dates.append(str(date)[:10])
+                        
+                        # Total Revenue 추출
+                        if 'Total Revenue' in q_income_stmt.columns:
+                            rev = q_income_stmt.loc[date, 'Total Revenue']
+                            if pd.notna(rev) and rev != 'N/A':
+                                try:
+                                    q_revenue_data.append(float(rev))
+                                except (ValueError, TypeError):
+                                    q_revenue_data.append(0)
+                            else:
+                                q_revenue_data.append(0)
+                        else:
+                            q_revenue_data.append(0)
+                        
+                        # Net Income 추출
+                        if 'Net Income' in q_income_stmt.columns:
+                            ni = q_income_stmt.loc[date, 'Net Income']
+                            if pd.notna(ni) and ni != 'N/A':
+                                try:
+                                    q_net_income_data.append(float(ni))
+                                except (ValueError, TypeError):
+                                    q_net_income_data.append(0)
+                            else:
+                                q_net_income_data.append(0)
+                        else:
+                            q_net_income_data.append(0)
+                    
+                    if dates and (any(q_revenue_data) or any(q_net_income_data)):
+                        fig_q_financials = go.Figure()
+                        
+                        # 날짜를 역순으로 표시 (오래된 것부터)
+                        dates_display = dates[::-1]
+                        q_revenue_display = q_revenue_data[::-1]
+                        q_net_income_display = q_net_income_data[::-1]
+                        
+                        if any(q_revenue_display):
+                            fig_q_financials.add_trace(
+                                go.Bar(name="Revenue", x=dates_display, y=q_revenue_display, marker_color='blue')
+                            )
+                        
+                        if any(q_net_income_display):
+                            fig_q_financials.add_trace(
+                                go.Bar(name="Net Income", x=dates_display, y=q_net_income_display, marker_color='green')
+                            )
+                        
+                        fig_q_financials.update_layout(
+                            title="Quarterly Revenue & Net Income",
+                            xaxis_title="Quarter",
+                            yaxis_title="Amount ($)",
+                            barmode='group',
+                            height=400,
+                            xaxis_tickangle=-45
+                        )
+                        
+                        st.plotly_chart(fig_q_financials, use_container_width=True)
+                    else:
+                        st.info("Quarterly financial data not available for charting.")
+                        
+                except Exception as e:
+                    st.warning(f"Could not create quarterly financial chart: {str(e)}")
+            else:
+                st.info("Quarterly income statement data not available.")
+            
+            # Quarterly Free Cash Flow vs CapEx Chart
+            st.subheader("Free Cash Flow vs CapEx (Quarterly)")
+            
+            if quarterly_data and not quarterly_data.get('cashflow', pd.DataFrame()).empty:
+                q_cashflow = quarterly_data['cashflow']
+                
+                try:
+                    dates = []
+                    q_fcf_data = []
+                    q_capex_data = []
+                    
+                    # 최신순 정렬 (최근 12개 쿼터만)
+                    sorted_dates = sorted(q_cashflow.index, reverse=True)[:12]
+                    
+                    for date in sorted_dates:
+                        dates.append(str(date)[:10])
+                        
+                        # Free Cash Flow
+                        fcf = None
+                        if 'Free Cash Flow' in q_cashflow.columns:
+                            fcf = q_cashflow.loc[date, 'Free Cash Flow']
+                        else:
+                            # Free Cash Flow = Operating Cash Flow - CapEx (계산)
+                            ocf = None
+                            capex = None
+                            
+                            if 'Operating Cash Flow' in q_cashflow.columns:
+                                ocf = q_cashflow.loc[date, 'Operating Cash Flow']
+                            elif 'Cash Flow From Continuing Operating Activities' in q_cashflow.columns:
+                                ocf = q_cashflow.loc[date, 'Cash Flow From Continuing Operating Activities']
+                            
+                            if 'Capital Expenditure' in q_cashflow.columns:
+                                capex = q_cashflow.loc[date, 'Capital Expenditure']
+                            
+                            if pd.notna(ocf) and ocf != 'N/A' and pd.notna(capex) and capex != 'N/A':
+                                try:
+                                    fcf = float(ocf) - abs(float(capex))
+                                except (ValueError, TypeError):
+                                    fcf = None
+                        
+                        if pd.notna(fcf) and fcf != 'N/A':
+                            try:
+                                q_fcf_data.append(float(fcf))
+                            except (ValueError, TypeError):
+                                q_fcf_data.append(0)
+                        else:
+                            q_fcf_data.append(0)
+                        
+                        # Capital Expenditure
+                        capex = None
+                        if 'Capital Expenditure' in q_cashflow.columns:
+                            capex = q_cashflow.loc[date, 'Capital Expenditure']
+                        
+                        if pd.notna(capex) and capex != 'N/A':
+                            try:
+                                q_capex_data.append(abs(float(capex)))  # CapEx는 음수로 저장되므로 절댓값
+                            except (ValueError, TypeError):
+                                q_capex_data.append(0)
+                        else:
+                            q_capex_data.append(0)
+                    
+                    if dates:
+                        fig_q_cashflow = go.Figure()
+                        
+                        # 날짜를 역순으로 표시
+                        dates_display = dates[::-1]
+                        q_fcf_display = q_fcf_data[::-1]
+                        q_capex_display = q_capex_data[::-1]
+                        
+                        fig_q_cashflow.add_trace(go.Scatter(
+                            x=dates_display,
+                            y=q_fcf_display,
+                            mode='lines+markers',
+                            name='Free Cash Flow',
+                            line=dict(color='green', width=2)
+                        ))
+                        
+                        fig_q_cashflow.add_trace(go.Scatter(
+                            x=dates_display,
+                            y=q_capex_display,
+                            mode='lines+markers',
+                            name='CapEx',
+                            line=dict(color='orange', width=2)
+                        ))
+                        
+                        fig_q_cashflow.update_layout(
+                            title="Free Cash Flow vs CapEx (Quarterly)",
+                            xaxis_title="Quarter",
+                            yaxis_title="Amount ($)",
+                            height=400,
+                            xaxis_tickangle=-45
+                        )
+                        
+                        st.plotly_chart(fig_q_cashflow, use_container_width=True)
+                    else:
+                        st.info("Quarterly cash flow data not available for charting.")
+                        
+                except Exception as e:
+                    st.warning(f"Could not create quarterly cash flow chart: {str(e)}")
+            else:
+                st.info("Quarterly cash flow data not available.")
+        else:
+            st.info("💡 **Quarterly data not available**\n\nQuarterly financial charts require quarterly data from yfinance. This data may not be available for all tickers.")
     
-    # Tab 4: Technicals
-    with tab4:
+    # Tab 3: Technicals
+    with tab3:
         st.header("Timing & Technical Analysis")
         
         technicals = data.get('technicals', {})
@@ -882,8 +1106,8 @@ if st.session_state.data:
             else:
                 st.info("No recent news available.")
     
-    # Tab 5: Raw Data
-    with tab5:
+    # Tab 4: Raw Data
+    with tab4:
         st.header("📊 Raw Data")
         st.markdown("View all raw data collected for detailed analysis.")
         st.markdown("---")
@@ -1320,6 +1544,93 @@ if st.session_state.data:
             except Exception as e:
                 st.error(f"Error preparing export data: {str(e)}")
                 st.info("Please try exporting individual data sections above.")
+    
+    # Tab 5: AI Chat
+    with tab5:
+        st.header("💬 AI Chat")
+        st.markdown("Ask questions about the company and collected data. The AI will use the analysis context to provide answers.")
+        
+        if not api_key or not api_key.strip():
+            st.warning("⚠️ **API Key Required**\n\nPlease enter your Gemini API Key in the sidebar to use the AI Chat feature.")
+        elif not st.session_state.data:
+            st.info("👈 Please run analysis first to enable AI Chat with company data context.")
+        else:
+            # Chat history display
+            if st.session_state.chat_history:
+                st.subheader("Chat History")
+                for i, chat in enumerate(st.session_state.chat_history):
+                    with st.chat_message("user"):
+                        st.write(chat["question"])
+                    with st.chat_message("assistant"):
+                        st.markdown(chat["answer"])
+                    if i < len(st.session_state.chat_history) - 1:
+                        st.markdown("---")
+            
+            # Chat input
+            st.markdown("---")
+            user_question = st.chat_input("Ask a question about the company, financials, technicals, or analysis...")
+            
+            if user_question:
+                # Add user question to chat
+                with st.chat_message("user"):
+                    st.write(user_question)
+                
+                # Generate AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        try:
+                            # Initialize AI Analyst (gemini_model is defined in sidebar)
+                            analyst = AIAnalyst(api_key, model_name=gemini_model)
+                            
+                            # Build context for chat
+                            context_prompt = _build_chat_context(ticker, data, strategy, ai_report=st.session_state.ai_report)
+                            
+                            # Chat prompt
+                            chat_prompt = f"""You are a financial analysis assistant. Answer the user's question about {ticker} based on the collected data and analysis context below.
+
+## Context Information
+
+{context_prompt}
+
+## User Question
+
+{user_question}
+
+## Instructions
+
+- Answer based ONLY on the provided context data
+- If the data doesn't contain the answer, clearly state "The collected data does not contain information to answer this question."
+- Be concise and specific
+- Reference specific metrics or data points when possible
+- If asked about analysis that wasn't performed, explain what data is available instead
+
+Provide a clear, helpful answer:"""
+                            
+                            # Get response from Gemini
+                            response = analyst.model.generate_content(chat_prompt)
+                            answer = response.text
+                            
+                            st.markdown(answer)
+                            
+                            # Save to chat history
+                            st.session_state.chat_history.append({
+                                "question": user_question,
+                                "answer": answer
+                            })
+                            
+                        except Exception as e:
+                            error_msg = f"Error generating response: {str(e)}"
+                            st.error(error_msg)
+                            st.session_state.chat_history.append({
+                                "question": user_question,
+                                "answer": error_msg
+                            })
+            
+            # Clear chat button
+            if st.session_state.chat_history:
+                if st.button("🗑️ Clear Chat History"):
+                    st.session_state.chat_history = []
+                    st.rerun()
 
 else:
     st.info("👈 Enter a ticker symbol and click 'Run Analysis' to start.")
