@@ -9,12 +9,31 @@ import numpy as np
 from typing import Dict, Any, Optional, List
 import warnings
 from datetime import datetime, date
-from utils import (
-    safe_get_numeric,
-    safe_get_latest,
-    safe_execute,
-    safe_divide
-)
+try:
+    # Try absolute import first (when stock is a package)
+    from stock.utils import (
+        safe_get_numeric,
+        safe_get_latest,
+        safe_execute,
+        safe_divide
+    )
+except ImportError:
+    # Fallback to relative import (when running from stock directory)
+    try:
+        from .utils import (
+            safe_get_numeric,
+            safe_get_latest,
+            safe_execute,
+            safe_divide
+        )
+    except ImportError:
+        # Final fallback: direct import (when stock is in sys.path)
+        from utils import (
+            safe_get_numeric,
+            safe_get_latest,
+            safe_execute,
+            safe_divide
+        )
 
 # duckduckgo_search 라이브러리
 try:

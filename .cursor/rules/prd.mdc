@@ -1,0 +1,128 @@
+---
+alwaysApply: true
+---
+
+# PRD: Stock Deep-Dive AI (MVP v1.0)
+
+## 1. Project Overview
+- **Product Name:** Stock Deep-Dive AI
+- **Objective:** 개인 투자자를 위한 데이터 기반 'Top-Down(거시) + Bottom-Up(재무/차트)' 통합 주식 분석 도구 개발.
+- **Key Value:** Finviz 스크리닝 이후, AI가 재무 포렌식, 시장 상황, 기술적 타이밍을 종합 분석하여 "매수 확신" 및 "진입 시점" 제안.
+- **Language:** UI/Output 전면 영어 (English).
+
+## 2. User Flow
+1. **Input:** Ticker 입력 (e.g., AAPL) + Strategy 선택 (Growth vs Value).
+2. **Process:** 데이터 수집(재무, 주가, 뉴스) → 지표 가공(파생변수) → AI 종합 분석.
+3. **Output:** 4개 탭으로 구성된 분석 대시보드 (Summary, Macro, Financials, Technicals).
+
+## 3. Tech Stack & Libraries
+- **Data Source (Market):** `yfinance` (Prices, Financials, Recent News, Calendar, Info)
+- **Data Source (History):** `duckduckgo_search` (Required for finding reasons behind past price spikes/drops).
+- **Analysis:** `pandas`, `pandas-ta` (Technicals), `scipy/numpy`
+- **AI Engine:** Google Gemini API (`gemini-2.5-flash-lite`)
+
+---
+
+## 4. Functional Specifications (Data Pipeline)
+
+### Class: `StockDataManager`
+아래 메서드를 포함하는 단일 클래스로 데이터 파이프라인 구축.
+
+#### A. Basic Info & Macro (`get_profile`)
+- `ticker.info` 활용: Sector, Industry, Country, Market Cap, Beta.
+
+#### B. Financial Forensic (`get_financials`)
+- **Raw Data:** Income Statement, Balance Sheet, Cash Flow (Last 3 years).
+- **Derived Metrics (계산 필수):**
+> **⚠️ 에러 처리 (필수):**
+  > 원본 데이터가 비어있거나(`None`, `NaN`), 분모가 `0`인 경우 **절대 에러를 발생시키지 말 것.**
+  > 대신 해당 지표 값을 문자열 **"N/A"** 또는 `None`으로 처리하여 UI에 "Data Not Available"로 표시되게 함.
+
+  1. **Quality of Earnings:** `OCF / Net Income` (1.0 미만 시 Warning).
+  2. **Activity (Turnover):**
+     - `Receivables Turnover` (Revenue / Receivables)
+     - `Inventory Turnover` (COGS / Inventory) -> 추세 하락 시 Risk.
+  3. **Stability:** `Interest Coverage Ratio` (EBIT / Interest Expense).
+  4. **Growth/Capex:** `CapEx Growth` (성장주의 경우 증가세 확인).
+  5. **Shareholder Return:** `Net Buyback Yield` (Repurchase가 양수인지 확인).
+
+#### C. Market Sentiment (`get_news_sentiment`)
+- **Recent:** `ticker.news` (최신 10건). 제목/링크/게시시간 추출.
+- **Historical (Event):** 1년 내 주가 변동폭(Change %) 상위 5일 날짜 추출 및 해당일 키워드 검색.
+
+#### D. Technicals & Timing (`get_technicals`)
+- **Library:** `pandas-ta` 활용.
+- **Indicators:**
+  - `RSI(14)`: 과매수(70)/과매도(30) 판별.
+  - `TRIX(30)`: 추세 전환 시그널 (Signal 선 교차).
+  - `MA`: 20, 60, 120일 이동평균선.
+  - `Volume`: 20일 평균 대비 현재 거래량 비율.
+- **Schedule:** `ticker.calendar` 활용. Next Earnings Date까지 남은 일수(D-Day) 계산.
+
+---
+
+## 5. AI Analyst Logic (Prompt Engineering)
+
+**Role:** CIO (Macro Strategist) + Forensic Accountant.
+**AI Engine:** Google Gemini API (`gemini-2.5-flash-lite`)
+
+**System Prompt Structure:**
+1. **Macro/Industry:** `info`의 Country, Industry 기반으로 거시경제(금리, 환율) 및 산업 경쟁구도(Moat, Value Chain) 분석.
+2. **Forensic Check:** 제공된 회전율, OCF 비율 데이터를 근거로 "이익의 질" 평가. (회계 부정 가능성 언급).
+3. **Strategy Fit:**
+   - **Growth Mode:** 매출 성장, PEG, CapEx 확장성 중시.
+   - **Value Mode:** FCF, 배당, 자사주 매입, 부채 축소 중시.
+4. **Timing Verdict:**
+   - Earnings D-7 이내면 "Volatility Warning(관망)" 권고.
+   - RSI/TRIX/뉴스 심리를 종합하여 구체적 진입가($) 및 매수/매도/보류 제안.
+
+---
+
+## 6. UI/UX Layout (Streamlit) - English Interface
+
+### Sidebar
+- **Title:** Stock Deep-Dive AI 📈
+- **Settings:** : Gemini API Key Input
+- **Input:** `Enter Ticker (e.g., NVDA)`
+- **Radio:** `Investment Style` [🚀 Growth, 🛡️ Value]
+- **Button:** `Run Analysis`
+
+### Main Area
+
+#### Header
+- Company Name | Ticker | Current Price (Change %)
+- **AI Score:** (0~100 Badge) | **Verdict:** [🟢 STRONG BUY / 🟡 HOLD / 🔴 SELL]
+
+#### Tab 1: Executive Summary
+- **The Bottom Line:** 3-bullet summary (Key Strength, Main Risk, Action Plan).
+- **Radar Chart:** Growth / Stability / Profitability / Momentum / Value.
+
+#### Tab 2: Macro & Industry (The Context)
+- **Macro Environment:** AI generated text on Country/Rates policies.
+- **Industry & Moat:** Value chain position, Competition level.
+- **Peer Comparison:** Simple metrics comparison table (if available in `info`).
+
+#### Tab 3: Financial Health (The Numbers)
+- **Forensic Check (Table):**
+  - ✅ OCF > Net Income
+  - ⚠️ Inventory Turnover (Declining)
+  - ✅ Interest Coverage (> 5.0)
+- **Charts (Plotly):**
+  - Bar: Revenue & Net Income (3yr)
+  - Line: Free Cash Flow vs CapEx
+
+#### Tab 4: Timing & Action (The Execution)
+- **Price Chart:** Candlestick + MA Lines + **Event Pins (📌)**.
+- **Indicators:** RSI Sub-chart, TRIX Sub-chart.
+- **Earnings Alert:** "📅 Next Earnings: Jan 24, 2025 (15 days left)"
+- **News Feed:** List of recent headlines with Sentiment Tags [Positive/Negative].
+
+---
+
+## 7. Implementation Checklist
+
+- [ ] **Step 1:** `StockDataManager` 클래스 구현 (yfinance 데이터 패칭 및 에러 핸들링).
+- [ ] **Step 2:** 재무 포렌식 공식(회전율 등) 및 기술적 지표(TRIX 등) 연산 로직 구현.
+- [ ] **Step 3:** OpenAI API 연동 및 `generate_analysis_report` 프롬프트 최적화.
+- [ ] **Step 4:** Streamlit UI 레이아웃 구성 (Tabs, Charts).
+- [ ] **Step 5:** 통합 테스트 (Growth/Value 모드 별 결과 차별화 확인).
