@@ -211,3 +211,4 @@ except (ValueError, TypeError):
 **리팩토링 완료일**: 2025-01-XX
 **작업자**: AI Assistant
 
+

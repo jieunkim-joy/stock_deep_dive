@@ -317,16 +317,16 @@ $[Specific price]
 ## 기술적 지표
 
 - **RSI(14)**: {technicals.get('current_rsi', 'N/A')}
-  - {f"과매수 (>70)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') > 70 else f"과매도 (<30)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') < 30 else "정상 범위"}
+  - {f"Overbought (>70)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') > 70 else f"Oversold (<30)" if isinstance(technicals.get('current_rsi'), (int, float)) and technicals.get('current_rsi') < 30 else "Normal Range"}
   
-- **TRIX(30)**: {technicals.get('current_trix', 'N/A')} (신호: {technicals.get('current_trix_signal', 'N/A')})
+- **TRIX(30)**: {technicals.get('current_trix', 'N/A')} (Signal: {technicals.get('current_trix_signal', 'N/A')})
   
-- **이동평균**: 20일=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60일=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120일=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
+- **Moving Averages**: 20d=${technicals.get('ma_data', {}).get('MA_20', 'N/A')} | 60d=${technicals.get('ma_data', {}).get('MA_60', 'N/A')} | 120d=${technicals.get('ma_data', {}).get('MA_120', 'N/A')}
   
-- **거래량 비율**: {technicals.get('volume_ratio', 'N/A')}
-  
-- **다음 실적 발표**: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
-  - {"⚠️ 실적 발표 7일 이내 - 변동성 경고 필요" if technicals.get('earnings_d_day') is not None and technicals.get('earnings_d_day') <= 7 else ""}
+- **Volume Ratio**: {technicals.get('volume_ratio', 'N/A')}
+
+- **Next Earnings**: {technicals.get('earnings_date', 'N/A')} (D-{technicals.get('earnings_d_day', 'N/A')})
+  - {"⚠️ Earnings within 7 days - Volatility warning required" if technicals.get('earnings_d_day') is not None and technicals.get('earnings_d_day') <= 7 else ""}
 
 ---
 
