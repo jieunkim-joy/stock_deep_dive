@@ -9,6 +9,12 @@ import numpy as np
 from typing import Dict, Any, Optional, List
 import warnings
 from datetime import datetime, date
+from utils import (
+    safe_get_numeric,
+    safe_get_latest,
+    safe_execute,
+    safe_divide
+)
 
 # duckduckgo_search 라이브러리
 try:
@@ -61,11 +67,11 @@ class StockDataManager:
                 'sector': info.get('sector', 'N/A'),
                 'industry': info.get('industry', 'N/A'),
                 'country': info.get('country', 'N/A'),
-                'marketCap': self._safe_get_numeric(info, 'marketCap'),
-                'beta': self._safe_get_numeric(info, 'beta'),
+                'marketCap': safe_get_numeric(info, 'marketCap'),
+                'beta': safe_get_numeric(info, 'beta'),
                 'longName': info.get('longName', info.get('shortName', 'N/A')),
-                'currentPrice': self._safe_get_numeric(info, 'currentPrice'),
-                'previousClose': self._safe_get_numeric(info, 'previousClose'),
+                'currentPrice': safe_get_numeric(info, 'currentPrice'),
+                'previousClose': safe_get_numeric(info, 'previousClose'),
                 'currency': info.get('currency', 'USD'),
             }
             
@@ -83,8 +89,12 @@ class StockDataManager:
             return profile
             
         except Exception as e:
-            print(f"Error in get_profile: {e}")
-            return self._empty_profile()
+            return safe_execute(
+                lambda: self._empty_profile(),
+                self._empty_profile(),
+                f"Error in get_profile for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def get_financials(self) -> Dict[str, Any]:
         """
@@ -141,11 +151,31 @@ class StockDataManager:
                 quarterly_cashflow_12q = quarterly_cashflow.iloc[:, :12] if quarterly_cashflow.shape[1] >= 12 else quarterly_cashflow
                 quarterly_cashflow_transposed = quarterly_cashflow_12q.T
             
-            # 파생 지표 계산 (연간 데이터 기준)
-            derived_metrics = self._calculate_derived_metrics(
+            # 파생 지표 계산 (연간 데이터 기준 - 시계열 포함)
+            derived_metrics_annual = self._calculate_derived_metrics_with_trend(
                 income_stmt_transposed,
                 balance_sheet_transposed,
-                cashflow_transposed
+                cashflow_transposed,
+                period_type='annual'
+            )
+            
+            # 쿼터별 파생 지표 계산 (쿼터별 데이터가 있는 경우)
+            derived_metrics_quarterly = {}
+            if (not quarterly_income_transposed.empty and 
+                not quarterly_balance_transposed.empty and 
+                not quarterly_cashflow_transposed.empty):
+                derived_metrics_quarterly = self._calculate_derived_metrics_with_trend(
+                    quarterly_income_transposed,
+                    quarterly_balance_transposed,
+                    quarterly_cashflow_transposed,
+                    period_type='quarterly'
+                )
+            
+            # Quarterly 데이터 상태 정보
+            quarterly_status = self._get_quarterly_data_status(
+                quarterly_income_transposed,
+                quarterly_balance_transposed,
+                quarterly_cashflow_transposed
             )
             
             return {
@@ -161,52 +191,129 @@ class StockDataManager:
                         'cashflow': quarterly_cashflow_transposed
                     }
                 },
-                'derived_metrics': derived_metrics
+                'derived_metrics': derived_metrics_annual,
+                'derived_metrics_quarterly': derived_metrics_quarterly,
+                'quarterly_data_status': quarterly_status
             }
             
         except Exception as e:
-            print(f"Error in get_financials: {e}")
-            return self._empty_financials()
+            return safe_execute(
+                lambda: self._empty_financials(),
+                self._empty_financials(),
+                f"Error in get_financials for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def _calculate_derived_metrics(self, income_stmt: pd.DataFrame, 
                                    balance_sheet: pd.DataFrame, 
                                    cashflow: pd.DataFrame) -> Dict[str, Any]:
         """
-        PRD에 명시된 5가지 파생 지표 계산
+        PRD에 명시된 5가지 파생 지표 계산 (기존 방식 - 호환성 유지)
+        """
+        return self._calculate_derived_metrics_with_trend(
+            income_stmt, balance_sheet, cashflow, period_type='annual'
+        )
+    
+    def _calculate_derived_metrics_with_trend(self, income_stmt: pd.DataFrame, 
+                                             balance_sheet: pd.DataFrame, 
+                                             cashflow: pd.DataFrame,
+                                             period_type: str = 'annual') -> Dict[str, Any]:
+        """
+        PRD에 명시된 5가지 파생 지표 계산 (시계열 추세 포함)
         
         1. Quality of Earnings: OCF / Net Income
         2. Activity (Turnover): Receivables Turnover, Inventory Turnover
         3. Stability: Interest Coverage Ratio
         4. Growth/Capex: CapEx Growth
         5. Shareholder Return: Net Buyback Yield
+        
+        Args:
+            period_type: 'annual' or 'quarterly'
         """
         metrics = {}
         
-        # 1. Quality of Earnings: OCF / Net Income
-        metrics['quality_of_earnings'] = self._calculate_quality_of_earnings(
-            cashflow, income_stmt
+        # 1. Quality of Earnings: OCF / Net Income (시계열 포함)
+        metrics['quality_of_earnings'] = self._calculate_quality_of_earnings_with_trend(
+            cashflow, income_stmt, period_type
         )
         
-        # 2. Activity (Turnover)
-        metrics['receivables_turnover'] = self._calculate_receivables_turnover(
-            income_stmt, balance_sheet
+        # 2. Activity (Turnover) - 시계열 포함
+        metrics['receivables_turnover'] = self._calculate_receivables_turnover_with_trend(
+            income_stmt, balance_sheet, period_type
         )
-        metrics['inventory_turnover'] = self._calculate_inventory_turnover(
-            income_stmt, balance_sheet
+        metrics['inventory_turnover'] = self._calculate_inventory_turnover_with_trend(
+            income_stmt, balance_sheet, period_type
         )
         
-        # 3. Stability: Interest Coverage Ratio
-        metrics['interest_coverage'] = self._calculate_interest_coverage(income_stmt)
+        # 3. Stability: Interest Coverage Ratio - 시계열 포함
+        metrics['interest_coverage'] = self._calculate_interest_coverage_with_trend(
+            income_stmt, period_type
+        )
         
-        # 4. Growth/Capex: CapEx Growth
-        metrics['capex_growth'] = self._calculate_capex_growth(cashflow)
+        # 4. Growth/Capex: CapEx Growth - 시계열 포함
+        metrics['capex_growth'] = self._calculate_capex_growth_with_trend(
+            cashflow, period_type
+        )
         
-        # 5. Shareholder Return: Net Buyback Yield
-        metrics['net_buyback_yield'] = self._calculate_net_buyback_yield(
-            cashflow, balance_sheet
+        # 5. Shareholder Return: Net Buyback Yield - 시계열 포함
+        metrics['net_buyback_yield'] = self._calculate_net_buyback_yield_with_trend(
+            cashflow, balance_sheet, period_type
         )
         
         return metrics
+    
+    def _get_quarterly_data_status(self, quarterly_income: pd.DataFrame,
+                                   quarterly_balance: pd.DataFrame,
+                                   quarterly_cashflow: pd.DataFrame) -> Dict[str, Any]:
+        """Quarterly 데이터 수집 상태 확인"""
+        status = {
+            'has_data': False,
+            'income_stmt_periods': 0,
+            'balance_sheet_periods': 0,
+            'cashflow_periods': 0,
+            'earliest_date': None,
+            'latest_date': None,
+            'total_quarters': 0,
+            'missing_data': []
+        }
+        
+        try:
+            has_income = not quarterly_income.empty
+            has_balance = not quarterly_balance.empty
+            has_cashflow = not quarterly_cashflow.empty
+            
+            if has_income or has_balance or has_cashflow:
+                status['has_data'] = True
+                status['income_stmt_periods'] = len(quarterly_income) if has_income else 0
+                status['balance_sheet_periods'] = len(quarterly_balance) if has_balance else 0
+                status['cashflow_periods'] = len(quarterly_cashflow) if has_cashflow else 0
+                
+                # 날짜 범위 확인
+                all_dates = []
+                if has_income:
+                    all_dates.extend(quarterly_income.index.tolist())
+                if has_balance:
+                    all_dates.extend(quarterly_balance.index.tolist())
+                if has_cashflow:
+                    all_dates.extend(quarterly_cashflow.index.tolist())
+                
+                if all_dates:
+                    all_dates = sorted(set(all_dates))
+                    status['earliest_date'] = str(all_dates[-1]) if all_dates else None  # 최신이 뒤에
+                    status['latest_date'] = str(all_dates[0]) if all_dates else None  # 오래된게 앞에
+                    status['total_quarters'] = len(all_dates)
+                
+                # 누락된 데이터 확인
+                if not has_income:
+                    status['missing_data'].append('income_stmt')
+                if not has_balance:
+                    status['missing_data'].append('balance_sheet')
+                if not has_cashflow:
+                    status['missing_data'].append('cashflow')
+        except Exception as e:
+            status['error'] = str(e)
+        
+        return status
     
     def _calculate_quality_of_earnings(self, cashflow: pd.DataFrame, 
                                        income_stmt: pd.DataFrame) -> Dict[str, Any]:
@@ -239,10 +346,10 @@ class StockDataManager:
                 return {'latest': 'N/A', 'trend': 'N/A', 'warning': False}
             
             # NaN 또는 0 체크
-            if pd.isna(ocf) or pd.isna(net_income) or net_income == 0:
+            # 안전한 나눗셈 사용
+            ratio = safe_divide(ocf, net_income, default='N/A')
+            if ratio == 'N/A':
                 return {'latest': 'N/A', 'trend': 'N/A', 'warning': False}
-            
-            ratio = ocf / net_income
             warning = ratio < 1.0  # 1.0 미만 시 Warning
             
             # 추세 계산 (3년 데이터가 있는 경우)
@@ -263,15 +370,16 @@ class StockDataManager:
                             break
                     
                     if (prev_ocf is not None and prev_ni is not None and 
-                        not pd.isna(prev_ocf) and not pd.isna(prev_ni) and prev_ni != 0):
-                        prev_ratio = prev_ocf / prev_ni
-                        if ratio > prev_ratio:
-                            trend = 'Improving'
-                        elif ratio < prev_ratio:
-                            trend = 'Declining'
-                        else:
-                            trend = 'Stable'
-                except:
+                        not pd.isna(prev_ocf) and not pd.isna(prev_ni)):
+                        prev_ratio = safe_divide(prev_ocf, prev_ni, default='N/A')
+                        if prev_ratio != 'N/A' and isinstance(ratio, (int, float)):
+                            if ratio > prev_ratio:
+                                trend = 'Improving'
+                            elif ratio < prev_ratio:
+                                trend = 'Declining'
+                            else:
+                                trend = 'Stable'
+                except Exception:
                     pass
             
             return {
@@ -281,8 +389,86 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error calculating quality of earnings: {e}")
-            return {'latest': 'N/A', 'trend': 'N/A', 'warning': False}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'trend': 'N/A', 'warning': False},
+                {'latest': 'N/A', 'trend': 'N/A', 'warning': False},
+                "Error calculating quality of earnings",
+                log_error=True
+            )
+    
+    def _calculate_quality_of_earnings_with_trend(self, cashflow: pd.DataFrame, 
+                                                   income_stmt: pd.DataFrame,
+                                                   period_type: str = 'annual') -> Dict[str, Any]:
+        """OCF / Net Income 계산 (시계열 추세 포함)"""
+        try:
+            if len(cashflow) == 0 or len(income_stmt) == 0:
+                return {'latest': 'N/A', 'trend': 'N/A', 'warning': False, 'time_series': []}
+            
+            ocf_keys = ['Operating Cash Flow', 'Total Cash From Operating Activities', 
+                       'OperatingCashFlow', 'Cash from Operating Activities']
+            ni_keys = ['Net Income', 'NetIncome', 'Net Income Common Stockholders']
+            
+            time_series = []
+            ratios = []
+            dates = []
+            
+            # 모든 기간에 대해 계산
+            for date_idx in cashflow.index:
+                ocf = None
+                net_income = None
+                
+                for key in ocf_keys:
+                    if key in cashflow.columns:
+                        ocf = cashflow.loc[date_idx, key]
+                        break
+                
+                for key in ni_keys:
+                    if key in income_stmt.columns:
+                        net_income = income_stmt.loc[date_idx, key]
+                        break
+                
+                if ocf is not None and net_income is not None:
+                    ratio = safe_divide(ocf, net_income, default='N/A')
+                    if ratio != 'N/A':
+                        ratios.append(ratio)
+                        dates.append(str(date_idx))
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(ratio, 2),
+                            'ocf': float(ocf) if pd.notna(ocf) else None,
+                            'net_income': float(net_income) if pd.notna(net_income) else None
+                        })
+            
+            if not ratios:
+                return {'latest': 'N/A', 'trend': 'N/A', 'warning': False, 'time_series': []}
+            
+            latest = round(ratios[0], 2)
+            warning = latest < 1.0
+            
+            # 추세 계산
+            trend = 'N/A'
+            if len(ratios) >= 2:
+                if ratios[0] > ratios[1]:
+                    trend = 'Improving'
+                elif ratios[0] < ratios[1]:
+                    trend = 'Declining'
+                else:
+                    trend = 'Stable'
+            
+            return {
+                'latest': latest,
+                'trend': trend,
+                'warning': warning,
+                'time_series': time_series
+            }
+            
+        except Exception as e:
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'trend': 'N/A', 'warning': False, 'time_series': []},
+                {'latest': 'N/A', 'trend': 'N/A', 'warning': False, 'time_series': []},
+                "Error calculating quality of earnings with trend",
+                log_error=True
+            )
     
     def _calculate_receivables_turnover(self, income_stmt: pd.DataFrame, 
                                        balance_sheet: pd.DataFrame) -> Dict[str, Any]:
@@ -312,10 +498,10 @@ class StockDataManager:
             if revenue is None or receivables is None:
                 return {'latest': 'N/A', 'trend': 'N/A'}
             
-            if pd.isna(revenue) or pd.isna(receivables) or receivables == 0:
+            # 안전한 나눗셈 사용
+            turnover = safe_divide(revenue, receivables, default='N/A')
+            if turnover == 'N/A':
                 return {'latest': 'N/A', 'trend': 'N/A'}
-            
-            turnover = revenue / receivables
             
             # 추세 계산
             trend = 'N/A'
@@ -335,16 +521,16 @@ class StockDataManager:
                             break
                     
                     if (prev_revenue is not None and prev_receivables is not None and
-                        not pd.isna(prev_revenue) and not pd.isna(prev_receivables) and 
-                        prev_receivables != 0):
-                        prev_turnover = prev_revenue / prev_receivables
-                        if turnover > prev_turnover:
-                            trend = 'Improving'
-                        elif turnover < prev_turnover:
-                            trend = 'Declining'
-                        else:
-                            trend = 'Stable'
-                except:
+                        not pd.isna(prev_revenue) and not pd.isna(prev_receivables)):
+                        prev_turnover = safe_divide(prev_revenue, prev_receivables, default='N/A')
+                        if prev_turnover != 'N/A' and isinstance(turnover, (int, float)):
+                            if turnover > prev_turnover:
+                                trend = 'Improving'
+                            elif turnover < prev_turnover:
+                                trend = 'Declining'
+                            else:
+                                trend = 'Stable'
+                except Exception:
                     pass
             
             return {
@@ -353,8 +539,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error calculating receivables turnover: {e}")
-            return {'latest': 'N/A', 'trend': 'N/A'}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'trend': 'N/A'},
+                {'latest': 'N/A', 'trend': 'N/A'},
+                "Error calculating receivables turnover",
+                log_error=True
+            )
     
     def _calculate_inventory_turnover(self, income_stmt: pd.DataFrame, 
                                       balance_sheet: pd.DataFrame) -> Dict[str, Any]:
@@ -384,10 +574,10 @@ class StockDataManager:
             if cogs is None or inventory is None:
                 return {'latest': 'N/A', 'trend': 'N/A'}
             
-            if pd.isna(cogs) or pd.isna(inventory) or inventory == 0:
+            # 안전한 나눗셈 사용
+            turnover = safe_divide(cogs, inventory, default='N/A')
+            if turnover == 'N/A':
                 return {'latest': 'N/A', 'trend': 'N/A'}
-            
-            turnover = cogs / inventory
             
             # 추세 계산
             trend = 'N/A'
@@ -407,16 +597,16 @@ class StockDataManager:
                             break
                     
                     if (prev_cogs is not None and prev_inventory is not None and
-                        not pd.isna(prev_cogs) and not pd.isna(prev_inventory) and 
-                        prev_inventory != 0):
-                        prev_turnover = prev_cogs / prev_inventory
-                        if turnover > prev_turnover:
-                            trend = 'Improving'
-                        elif turnover < prev_turnover:
-                            trend = 'Declining'
-                        else:
-                            trend = 'Stable'
-                except:
+                        not pd.isna(prev_cogs) and not pd.isna(prev_inventory)):
+                        prev_turnover = safe_divide(prev_cogs, prev_inventory, default='N/A')
+                        if prev_turnover != 'N/A' and isinstance(turnover, (int, float)):
+                            if turnover > prev_turnover:
+                                trend = 'Improving'
+                            elif turnover < prev_turnover:
+                                trend = 'Declining'
+                            else:
+                                trend = 'Stable'
+                except Exception:
                     pass
             
             return {
@@ -425,8 +615,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error calculating inventory turnover: {e}")
-            return {'latest': 'N/A', 'trend': 'N/A'}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'trend': 'N/A'},
+                {'latest': 'N/A', 'trend': 'N/A'},
+                "Error calculating inventory turnover",
+                log_error=True
+            )
     
     def _calculate_interest_coverage(self, income_stmt: pd.DataFrame) -> Dict[str, Any]:
         """Interest Coverage Ratio = EBIT / Interest Expense"""
@@ -456,10 +650,10 @@ class StockDataManager:
             if ebit is None or interest_expense is None:
                 return {'latest': 'N/A', 'status': 'N/A'}
             
-            if pd.isna(ebit) or pd.isna(interest_expense) or interest_expense == 0:
+            # 안전한 나눗셈 사용 (Interest Expense는 음수일 수 있으므로 절댓값 사용)
+            ratio = safe_divide(ebit, abs(interest_expense) if interest_expense != 0 else 0, default='N/A')
+            if ratio == 'N/A':
                 return {'latest': 'N/A', 'status': 'N/A'}
-            
-            ratio = ebit / abs(interest_expense)  # Interest Expense는 음수일 수 있음
             
             # 상태 판단 (5.0 이상이면 안정적)
             status = 'Strong' if ratio >= 5.0 else 'Weak' if ratio >= 1.0 else 'Critical'
@@ -470,8 +664,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error calculating interest coverage: {e}")
-            return {'latest': 'N/A', 'status': 'N/A'}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'status': 'N/A'},
+                {'latest': 'N/A', 'status': 'N/A'},
+                "Error calculating interest coverage",
+                log_error=True
+            )
     
     def _calculate_capex_growth(self, cashflow: pd.DataFrame) -> Dict[str, Any]:
         """CapEx Growth 계산 (연간 성장률)"""
@@ -497,14 +695,18 @@ class StockDataManager:
             if capex_latest is None or capex_prev is None:
                 return {'latest': 'N/A', 'trend': 'N/A'}
             
-            if pd.isna(capex_latest) or pd.isna(capex_prev) or capex_prev == 0:
-                return {'latest': 'N/A', 'trend': 'N/A'}
-            
             # CapEx는 일반적으로 음수로 표시됨 (지출이므로)
             capex_latest = abs(capex_latest)
             capex_prev = abs(capex_prev)
             
-            growth_rate = ((capex_latest - capex_prev) / capex_prev) * 100
+            # 안전한 나눗셈 사용
+            growth_rate = safe_divide(
+                (capex_latest - capex_prev) * 100,
+                capex_prev,
+                default='N/A'
+            )
+            if growth_rate == 'N/A':
+                return {'latest': 'N/A', 'trend': 'N/A'}
             
             trend = 'Expanding' if growth_rate > 0 else 'Contracting' if growth_rate < 0 else 'Stable'
             
@@ -514,8 +716,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error calculating capex growth: {e}")
-            return {'latest': 'N/A', 'trend': 'N/A'}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'trend': 'N/A'},
+                {'latest': 'N/A', 'trend': 'N/A'},
+                "Error calculating capex growth",
+                log_error=True
+            )
     
     def _calculate_net_buyback_yield(self, cashflow: pd.DataFrame, 
                                      balance_sheet: pd.DataFrame) -> Dict[str, Any]:
@@ -556,22 +762,30 @@ class StockDataManager:
                 info = self.ticker.info
                 market_cap = info.get('marketCap', None)
                 
-                if market_cap is None or pd.isna(market_cap) or market_cap == 0:
+                # 안전한 나눗셈 사용
+                yield_pct = safe_divide(
+                    net_buyback * 100,
+                    market_cap,
+                    default='N/A'
+                )
+                if yield_pct == 'N/A':
                     return {'latest': 'N/A', 'status': 'N/A'}
-                
-                yield_pct = (net_buyback / market_cap) * 100
                 status = 'Positive' if net_buyback > 0 else 'Negative' if net_buyback < 0 else 'Neutral'
                 
                 return {
                     'latest': round(yield_pct, 4),  # 소수점 4자리 (퍼센트)
                     'status': status
                 }
-            except:
+            except Exception:
                 return {'latest': 'N/A', 'status': 'N/A'}
             
         except Exception as e:
-            print(f"Error calculating net buyback yield: {e}")
-            return {'latest': 'N/A', 'status': 'N/A'}
+            return safe_execute(
+                lambda: {'latest': 'N/A', 'status': 'N/A'},
+                {'latest': 'N/A', 'status': 'N/A'},
+                "Error calculating net buyback yield",
+                log_error=True
+            )
     
     def get_technicals(self) -> Dict[str, Any]:
         """
@@ -625,17 +839,17 @@ class StockDataManager:
             hist['Volume_Ratio'] = hist['Volume'] / hist['Volume_MA20']
             
             # 현재 값 추출 (최신 데이터)
-            current_rsi = self._safe_get_latest(hist['RSI'])
-            current_trix = self._safe_get_latest(hist['TRIX']) if 'TRIX' in hist.columns else 'N/A'
-            current_trix_signal = self._safe_get_latest(hist['TRIX_Signal']) if 'TRIX_Signal' in hist.columns else 'N/A'
+            current_rsi = safe_get_latest(hist['RSI'])
+            current_trix = safe_get_latest(hist['TRIX']) if 'TRIX' in hist.columns else 'N/A'
+            current_trix_signal = safe_get_latest(hist['TRIX_Signal']) if 'TRIX_Signal' in hist.columns else 'N/A'
             
             ma_data = {
-                'MA_20': self._safe_get_latest(hist['MA_20']),
-                'MA_60': self._safe_get_latest(hist['MA_60']),
-                'MA_120': self._safe_get_latest(hist['MA_120'])
+                'MA_20': safe_get_latest(hist['MA_20']),
+                'MA_60': safe_get_latest(hist['MA_60']),
+                'MA_120': safe_get_latest(hist['MA_120'])
             }
             
-            volume_ratio = self._safe_get_latest(hist['Volume_Ratio'])
+            volume_ratio = safe_get_latest(hist['Volume_Ratio'])
             
             # Earnings D-Day 계산
             earnings_info = self._get_earnings_d_day()
@@ -652,11 +866,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error in get_technicals: {e}")
-            return {
-                'error': str(e),
-                'price_data': None
-            }
+            return safe_execute(
+                lambda: {'error': str(e), 'price_data': None},
+                {'error': str(e), 'price_data': None},
+                f"Error in get_technicals for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def _get_earnings_d_day(self) -> Dict[str, Any]:
         """다음 실적 발표일까지 남은 일수 계산"""
@@ -708,12 +923,12 @@ class StockDataManager:
             elif isinstance(earnings_date, str):
                 try:
                     earnings_date = pd.Timestamp(earnings_date)
-                except:
+                except Exception:
                     return {'date': None, 'd_day': None}
             elif not isinstance(earnings_date, pd.Timestamp):
                 try:
                     earnings_date = pd.Timestamp(earnings_date)
-                except:
+                except Exception:
                     return {'date': None, 'd_day': None}
             
             d_day = (earnings_date - today).days
@@ -724,10 +939,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error getting earnings D-Day: {e}")
-            import traceback
-            traceback.print_exc()
-            return {'date': None, 'd_day': None}
+            return safe_execute(
+                lambda: {'date': None, 'd_day': None},
+                {'date': None, 'd_day': None},
+                f"Error getting earnings D-Day for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def get_news_context(self) -> Dict[str, Any]:
         """
@@ -751,11 +968,12 @@ class StockDataManager:
             }
             
         except Exception as e:
-            print(f"Error in get_news_context: {e}")
-            return {
-                'recent_news': [],
-                'historical_events': []
-            }
+            return safe_execute(
+                lambda: {'recent_news': [], 'historical_events': []},
+                {'recent_news': [], 'historical_events': []},
+                f"Error in get_news_context for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def _get_recent_news(self) -> list:
         """최신 10개 뉴스 수집"""
@@ -804,14 +1022,18 @@ class StockDataManager:
                     
                     recent_news.append(news_item)
                 except Exception as e:
-                    print(f"Error processing news item: {e}")
+                    # 개별 뉴스 항목 처리 실패는 무시하고 계속 진행
                     continue
             
             return recent_news
             
         except Exception as e:
-            print(f"Error getting recent news: {e}")
-            return []
+            return safe_execute(
+                lambda: [],
+                [],
+                f"Error getting recent news for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def _get_historical_news_context(self) -> list:
         """
@@ -851,8 +1073,12 @@ class StockDataManager:
             return historical_events
             
         except Exception as e:
-            print(f"Error getting historical news context: {e}")
-            return []
+            return safe_execute(
+                lambda: [],
+                [],
+                f"Error getting historical news context for {self.ticker_symbol}",
+                log_error=True
+            )
     
     def _get_company_name(self) -> str:
         """회사명 가져오기 (검색 쿼리 개선을 위해)"""
@@ -1025,28 +1251,7 @@ class StockDataManager:
         
         return score
     
-    # Helper Methods
-    def _safe_get_numeric(self, info: Dict, key: str) -> Any:
-        """안전하게 숫자 값 가져오기"""
-        try:
-            value = info.get(key)
-            if value is None or pd.isna(value):
-                return 'N/A'
-            return float(value) if isinstance(value, (int, float)) else value
-        except:
-            return 'N/A'
-    
-    def _safe_get_latest(self, series: pd.Series) -> Any:
-        """시리즈의 최신 값 안전하게 가져오기"""
-        try:
-            if series.empty:
-                return 'N/A'
-            latest = series.iloc[-1]
-            if pd.isna(latest):
-                return 'N/A'
-            return round(float(latest), 2) if isinstance(latest, (int, float)) else latest
-        except:
-            return 'N/A'
+    # Helper Methods (이제 utils.py로 이동됨)
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """RSI(Relative Strength Index) 직접 계산"""
@@ -1055,10 +1260,11 @@ class StockDataManager:
             gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
             
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            return rsi
-        except:
+            # RSI 계산: loss가 0인 경우를 처리하기 위해 Series 단위로 계산
+            rs = gain / loss.replace(0, np.nan)
+            rsi = 100 - (100 / (1 + rs.fillna(0)))
+            return rsi.fillna(50)  # NaN인 경우 50으로 채움
+        except Exception:
             return pd.Series([np.nan] * len(prices), index=prices.index)
     
     def _calculate_trix(self, prices: pd.Series, period: int = 30) -> Dict[str, pd.Series]:
@@ -1083,7 +1289,7 @@ class StockDataManager:
                 'trix': trix,
                 'signal': signal
             }
-        except:
+        except Exception:
             empty_series = pd.Series([np.nan] * len(prices), index=prices.index)
             return {
                 'trix': empty_series,
@@ -1106,6 +1312,288 @@ class StockDataManager:
             'currency': 'USD'
         }
     
+    def _calculate_receivables_turnover_with_trend(self, income_stmt: pd.DataFrame,
+                                                   balance_sheet: pd.DataFrame,
+                                                   period_type: str = 'annual') -> Dict[str, Any]:
+        """Receivables Turnover 계산 (시계열 포함)"""
+        try:
+            if len(income_stmt) == 0 or len(balance_sheet) == 0:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            revenue_keys = ['Total Revenue', 'Revenue', 'Revenues', 'Net Sales']
+            receivables_keys = ['Receivables', 'Accounts Receivable', 
+                              'Net Receivables', 'AccountsReceivable']
+            
+            time_series = []
+            turnovers = []
+            
+            for date_idx in income_stmt.index:
+                revenue = None
+                receivables = None
+                
+                for key in revenue_keys:
+                    if key in income_stmt.columns:
+                        revenue = income_stmt.loc[date_idx, key]
+                        break
+                
+                for key in receivables_keys:
+                    if key in balance_sheet.columns:
+                        receivables = balance_sheet.loc[date_idx, key]
+                        break
+                
+                if revenue is not None and receivables is not None:
+                    turnover = safe_divide(revenue, receivables, default='N/A')
+                    if turnover != 'N/A':
+                        turnovers.append(turnover)
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(turnover, 2),
+                            'revenue': float(revenue) if pd.notna(revenue) else None,
+                            'receivables': float(receivables) if pd.notna(receivables) else None
+                        })
+            
+            if not turnovers:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            latest = round(turnovers[0], 2)
+            trend = 'N/A'
+            if len(turnovers) >= 2:
+                if turnovers[0] > turnovers[1]:
+                    trend = 'Improving'
+                elif turnovers[0] < turnovers[1]:
+                    trend = 'Declining'
+                else:
+                    trend = 'Stable'
+            
+            return {'latest': latest, 'trend': trend, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+    
+    def _calculate_inventory_turnover_with_trend(self, income_stmt: pd.DataFrame,
+                                                 balance_sheet: pd.DataFrame,
+                                                 period_type: str = 'annual') -> Dict[str, Any]:
+        """Inventory Turnover 계산 (시계열 포함)"""
+        try:
+            if len(income_stmt) == 0 or len(balance_sheet) == 0:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            cogs_keys = ['Cost Of Goods Sold', 'Cost of Revenue', 'COGS', 
+                        'CostOfGoodsSold', 'Cost of Goods Sold']
+            inventory_keys = ['Inventory', 'Inventories', 'Total Inventory']
+            
+            time_series = []
+            turnovers = []
+            
+            for date_idx in income_stmt.index:
+                cogs = None
+                inventory = None
+                
+                for key in cogs_keys:
+                    if key in income_stmt.columns:
+                        cogs = income_stmt.loc[date_idx, key]
+                        break
+                
+                for key in inventory_keys:
+                    if key in balance_sheet.columns:
+                        inventory = balance_sheet.loc[date_idx, key]
+                        break
+                
+                if cogs is not None and inventory is not None:
+                    turnover = safe_divide(cogs, inventory, default='N/A')
+                    if turnover != 'N/A':
+                        turnovers.append(turnover)
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(turnover, 2),
+                            'cogs': float(cogs) if pd.notna(cogs) else None,
+                            'inventory': float(inventory) if pd.notna(inventory) else None
+                        })
+            
+            if not turnovers:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            latest = round(turnovers[0], 2)
+            trend = 'N/A'
+            if len(turnovers) >= 2:
+                if turnovers[0] > turnovers[1]:
+                    trend = 'Improving'
+                elif turnovers[0] < turnovers[1]:
+                    trend = 'Declining'
+                else:
+                    trend = 'Stable'
+            
+            return {'latest': latest, 'trend': trend, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+    
+    def _calculate_interest_coverage_with_trend(self, income_stmt: pd.DataFrame,
+                                               period_type: str = 'annual') -> Dict[str, Any]:
+        """Interest Coverage Ratio 계산 (시계열 포함)"""
+        try:
+            if len(income_stmt) == 0:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            ebit_keys = ['EBIT', 'Earnings Before Interest And Taxes', 
+                        'Operating Income', 'Income Before Tax']
+            interest_keys = ['Interest Expense', 'InterestExpense', 
+                           'Total Interest Expense', 'Interest And Debt Expense']
+            
+            time_series = []
+            ratios = []
+            
+            for date_idx in income_stmt.index:
+                ebit = None
+                interest_expense = None
+                
+                for key in ebit_keys:
+                    if key in income_stmt.columns:
+                        ebit = income_stmt.loc[date_idx, key]
+                        break
+                
+                for key in interest_keys:
+                    if key in income_stmt.columns:
+                        interest_expense = income_stmt.loc[date_idx, key]
+                        break
+                
+                if ebit is not None and interest_expense is not None:
+                    ratio = safe_divide(ebit, abs(interest_expense) if interest_expense != 0 else 0, default='N/A')
+                    if ratio != 'N/A':
+                        ratios.append(ratio)
+                        status = 'Strong' if ratio >= 5.0 else 'Weak' if ratio >= 1.0 else 'Critical'
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(ratio, 2),
+                            'status': status,
+                            'ebit': float(ebit) if pd.notna(ebit) else None,
+                            'interest_expense': float(interest_expense) if pd.notna(interest_expense) else None
+                        })
+            
+            if not ratios:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            latest = round(ratios[0], 2)
+            status = 'Strong' if latest >= 5.0 else 'Weak' if latest >= 1.0 else 'Critical'
+            
+            return {'latest': latest, 'status': status, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+    
+    def _calculate_capex_growth_with_trend(self, cashflow: pd.DataFrame,
+                                          period_type: str = 'annual') -> Dict[str, Any]:
+        """CapEx Growth 계산 (시계열 포함)"""
+        try:
+            if len(cashflow) < 2:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            capex_keys = ['Capital Expenditure', 'CapitalExpenditure', 
+                         'Capital Expenditures', 'Purchase Of Property Plant And Equipment']
+            
+            capex_values = []
+            dates_list = []
+            
+            for date_idx in cashflow.index:
+                capex = None
+                for key in capex_keys:
+                    if key in cashflow.columns:
+                        capex = cashflow.loc[date_idx, key]
+                        break
+                
+                if capex is not None and pd.notna(capex):
+                    capex_values.append(abs(float(capex)))
+                    dates_list.append(str(date_idx))
+            
+            if len(capex_values) < 2:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            # Growth 계산
+            time_series = []
+            growth_rates = []
+            
+            for i in range(len(capex_values) - 1):
+                if capex_values[i+1] != 0:
+                    growth = ((capex_values[i] - capex_values[i+1]) / capex_values[i+1]) * 100
+                    growth_rates.append(growth)
+                    time_series.append({
+                        'date': dates_list[i],
+                        'value': round(growth, 2),
+                        'capex': capex_values[i],
+                        'prev_capex': capex_values[i+1]
+                    })
+            
+            if not growth_rates:
+                return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+            
+            latest = round(growth_rates[0], 2)
+            trend = 'Expanding' if latest > 0 else 'Contracting' if latest < 0 else 'Stable'
+            
+            return {'latest': latest, 'trend': trend, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'trend': 'N/A', 'time_series': []}
+    
+    def _calculate_net_buyback_yield_with_trend(self, cashflow: pd.DataFrame,
+                                               balance_sheet: pd.DataFrame,
+                                               period_type: str = 'annual') -> Dict[str, Any]:
+        """Net Buyback Yield 계산 (시계열 포함)"""
+        try:
+            if len(cashflow) == 0:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            repurchase_keys = ['Purchase Of Common Stock', 'Common Stock Repurchased', 
+                             'Repurchase Of Common Stock', 'Stock Repurchase']
+            issuance_keys = ['Sale Of Common Stock', 'Common Stock Issued', 
+                           'Issuance Of Common Stock']
+            
+            time_series = []
+            yields = []
+            
+            try:
+                info = self.ticker.info
+                market_cap = info.get('marketCap', None)
+            except:
+                market_cap = None
+            
+            for date_idx in cashflow.index:
+                repurchase = None
+                issuance = None
+                
+                for key in repurchase_keys:
+                    if key in cashflow.columns:
+                        repurchase = cashflow.loc[date_idx, key]
+                        break
+                
+                for key in issuance_keys:
+                    if key in cashflow.columns:
+                        issuance = cashflow.loc[date_idx, key]
+                        break
+                
+                net_buyback = 0
+                if repurchase is not None and pd.notna(repurchase):
+                    net_buyback += abs(repurchase)
+                if issuance is not None and pd.notna(issuance):
+                    net_buyback -= abs(issuance)
+                
+                if market_cap and market_cap != 0 and pd.notna(market_cap):
+                    yield_pct = safe_divide(net_buyback * 100, market_cap, default='N/A')
+                    if yield_pct != 'N/A':
+                        yields.append(yield_pct)
+                        status = 'Positive' if net_buyback > 0 else 'Negative' if net_buyback < 0 else 'Neutral'
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(yield_pct, 4),
+                            'status': status,
+                            'net_buyback': net_buyback
+                        })
+            
+            if not yields:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            latest = round(yields[0], 4)
+            status = 'Positive' if latest > 0 else 'Negative' if latest < 0 else 'Neutral'
+            
+            return {'latest': latest, 'status': status, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+    
     def _empty_financials(self) -> Dict[str, Any]:
         """빈 재무 데이터 반환"""
         return {
@@ -1122,11 +1610,13 @@ class StockDataManager:
                 }
             },
             'derived_metrics': {
-                'quality_of_earnings': {'latest': 'N/A', 'trend': 'N/A', 'warning': False},
-                'receivables_turnover': {'latest': 'N/A', 'trend': 'N/A'},
-                'inventory_turnover': {'latest': 'N/A', 'trend': 'N/A'},
-                'interest_coverage': {'latest': 'N/A', 'status': 'N/A'},
-                'capex_growth': {'latest': 'N/A', 'trend': 'N/A'},
-                'net_buyback_yield': {'latest': 'N/A', 'status': 'N/A'}
-            }
+                'quality_of_earnings': {'latest': 'N/A', 'trend': 'N/A', 'warning': False, 'time_series': []},
+                'receivables_turnover': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
+                'inventory_turnover': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
+                'interest_coverage': {'latest': 'N/A', 'status': 'N/A', 'time_series': []},
+                'capex_growth': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
+                'net_buyback_yield': {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            },
+            'derived_metrics_quarterly': {},
+            'quarterly_data_status': {'has_data': False}
         }
