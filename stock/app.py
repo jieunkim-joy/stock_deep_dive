@@ -109,20 +109,20 @@ if run_analysis:
         # 2. AI 분석 (API 키가 있는 경우에만 실행)
         if api_key and api_key.strip():
             try:
-                status_text.text("🤖 Running AI analysis...")
-                progress_bar.progress(60)
-                
-                analyst = AIAnalyst(api_key, model_name=gemini_model)
-                ai_report = analyst.generate_report(ticker, data, strategy, language=lang_code)
-                ai_score = analyst.calculate_ai_score(data, strategy)
-                verdict = analyst.get_verdict(ai_score)
-                
-                st.session_state.ai_report = ai_report
-                st.session_state.ai_score = ai_score
-                st.session_state.verdict = verdict
-                
-                progress_bar.progress(100)
-                status_text.text("✅ Analysis complete!")
+        status_text.text("🤖 Running AI analysis...")
+        progress_bar.progress(60)
+        
+        analyst = AIAnalyst(api_key, model_name=gemini_model)
+        ai_report = analyst.generate_report(ticker, data, strategy, language=lang_code)
+        ai_score = analyst.calculate_ai_score(data, strategy)
+        verdict = analyst.get_verdict(ai_score)
+        
+        st.session_state.ai_report = ai_report
+        st.session_state.ai_score = ai_score
+        st.session_state.verdict = verdict
+        
+        progress_bar.progress(100)
+        status_text.text("✅ Analysis complete!")
                 time.sleep(0.5)
                 progress_bar.empty()
                 status_text.empty()
@@ -144,9 +144,9 @@ if run_analysis:
             st.session_state.verdict = None
             progress_bar.progress(100)
             status_text.text("✅ Basic analysis complete! (Enter API key for AI analysis)")
-            time.sleep(0.5)
-            progress_bar.empty()
-            status_text.empty()
+        time.sleep(0.5)
+        progress_bar.empty()
+        status_text.empty()
         
     except Exception as e:
         st.error(f"❌ Error collecting data: {str(e)}")

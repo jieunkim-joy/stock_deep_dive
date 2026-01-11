@@ -267,7 +267,7 @@ if st.session_state.data:
         st.header("Summary & Analysis")
         
         # Company Profile 요약 (항상 표시)
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.metric("Company", profile.get('longName', 'N/A'))
             st.caption(f"Sector: {profile.get('sector', 'N/A')}")
@@ -280,8 +280,34 @@ if st.session_state.data:
             st.metric("Market Cap", f"${format_number(profile.get('marketCap', 'N/A'))}")
             st.caption(f"Country: {profile.get('country', 'N/A')}")
         with col4:
+            roe = profile.get('roe', 'N/A')
+            roe_display = f"{roe*100:.2f}%" if isinstance(roe, (int, float)) else 'N/A'
+            st.metric("ROE", roe_display)
+            st.caption("Return on Equity")
+        with col5:
+            trailing_pe = profile.get('trailingPE', 'N/A')
+            trailing_pe_display = f"{trailing_pe:.2f}" if isinstance(trailing_pe, (int, float)) else 'N/A'
+            st.metric("Trailing P/E", trailing_pe_display)
+            st.caption("Trailing Price to Earnings")
+        with col6:
+            forward_pe = profile.get('forwardPE', 'N/A')
+            forward_pe_display = f"{forward_pe:.2f}" if isinstance(forward_pe, (int, float)) else 'N/A'
+            st.metric("Forward P/E", forward_pe_display)
+            st.caption("Forward Price to Earnings")
+        
+        # Beta와 Strategy 추가 행
+        col_beta, col_strategy = st.columns(2)
+        with col_beta:
             st.metric("Beta", profile.get('beta', 'N/A'))
-            st.caption(f"Strategy: {strategy}")
+        with col_strategy:
+            st.metric("Strategy", strategy)
+        
+        # Beta와 Strategy 추가 행
+        col_beta, col_strategy = st.columns(2)
+        with col_beta:
+            st.metric("Beta", profile.get('beta', 'N/A'))
+        with col_strategy:
+            st.metric("Strategy", strategy)
         
         st.markdown("---")
         
@@ -403,6 +429,16 @@ if st.session_state.data:
             "Value": ic.get('latest', 'N/A'),
             "Trend": ic.get('status', 'N/A'),
             "Status": "✅" if ic.get('status') == 'Strong' else "⚠️" if ic.get('status') == 'Weak' else "🔴" if ic.get('status') == 'Critical' else "N/A"
+        })
+        
+        # Debt to Equity
+        dte = metrics.get('debt_to_equity', {})
+        dte_status = "✅" if dte.get('status') == 'Low' else "⚠️" if dte.get('status') == 'Moderate' else "🔴" if dte.get('status') == 'High' else "N/A"
+        forensic_data.append({
+            "Metric": "Debt to Equity Ratio",
+            "Value": dte.get('latest', 'N/A'),
+            "Trend": dte.get('status', 'N/A'),
+            "Status": dte_status
         })
         
         # CapEx Growth

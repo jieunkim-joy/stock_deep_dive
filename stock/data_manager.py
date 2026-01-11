@@ -92,6 +92,9 @@ class StockDataManager:
                 'currentPrice': safe_get_numeric(info, 'currentPrice'),
                 'previousClose': safe_get_numeric(info, 'previousClose'),
                 'currency': info.get('currency', 'USD'),
+                'roe': safe_get_numeric(info, 'returnOnEquity'),  # ROE (Return on Equity)
+                'trailingPE': safe_get_numeric(info, 'trailingPE'),  # Trailing PER (Price to Earnings Ratio)
+                'forwardPE': safe_get_numeric(info, 'forwardPE'),  # Forward PER (Price to Earnings Ratio)
             }
             
             # Change % 계산
@@ -267,6 +270,11 @@ class StockDataManager:
         # 3. Stability: Interest Coverage Ratio - 시계열 포함
         metrics['interest_coverage'] = self._calculate_interest_coverage_with_trend(
             income_stmt, period_type
+        )
+        
+        # 3-1. Stability: Debt to Equity Ratio - 시계열 포함
+        metrics['debt_to_equity'] = self._calculate_debt_to_equity_with_trend(
+            balance_sheet, period_type
         )
         
         # 4. Growth/Capex: CapEx Growth - 시계열 포함
@@ -1328,7 +1336,10 @@ class StockDataManager:
             'currentPrice': 'N/A',
             'previousClose': 'N/A',
             'changePercent': 'N/A',
-            'currency': 'USD'
+            'currency': 'USD',
+            'roe': 'N/A',
+            'trailingPE': 'N/A',
+            'forwardPE': 'N/A'
         }
     
     def _calculate_receivables_turnover_with_trend(self, income_stmt: pd.DataFrame,
@@ -1497,6 +1508,124 @@ class StockDataManager:
         except Exception:
             return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
     
+    def _calculate_debt_to_equity_with_trend(self, balance_sheet: pd.DataFrame,
+                                             period_type: str = 'annual') -> Dict[str, Any]:
+        """Debt to Equity Ratio 계산 (시계열 포함)"""
+        try:
+            if len(balance_sheet) == 0:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            debt_keys = ['Total Debt', 'TotalDebt', 'Total Liabilities Net Minority Interest',
+                        'Total Liabilities', 'Long Term Debt', 'Short Term Debt']
+            equity_keys = ['Total Stockholder Equity', 'Stockholders Equity', 
+                          'Total Equity', 'Total Shareholders Equity']
+            
+            time_series = []
+            ratios = []
+            
+            for date_idx in balance_sheet.index:
+                total_debt = None
+                total_equity = None
+                
+                # 부채 찾기
+                for key in debt_keys:
+                    if key in balance_sheet.columns:
+                        value = balance_sheet.loc[date_idx, key]
+                        if value is not None and pd.notna(value):
+                            total_debt = value
+                            break
+                
+                # 자기자본 찾기
+                for key in equity_keys:
+                    if key in balance_sheet.columns:
+                        value = balance_sheet.loc[date_idx, key]
+                        if value is not None and pd.notna(value):
+                            total_equity = value
+                            break
+                
+                if total_debt is not None and total_equity is not None and total_equity != 0:
+                    ratio = safe_divide(total_debt, total_equity, default='N/A')
+                    if ratio != 'N/A':
+                        ratios.append(ratio)
+                        # 상태 판정: 0-1: Low, 1-2: Moderate, 2+: High
+                        status = 'Low' if ratio < 1.0 else 'Moderate' if ratio < 2.0 else 'High'
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(ratio, 2),
+                            'status': status,
+                            'total_debt': float(total_debt) if pd.notna(total_debt) else None,
+                            'total_equity': float(total_equity) if pd.notna(total_equity) else None
+                        })
+            
+            if not ratios:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            latest = round(ratios[0], 2)
+            status = 'Low' if latest < 1.0 else 'Moderate' if latest < 2.0 else 'High'
+            
+            return {'latest': latest, 'status': status, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+    
+    def _calculate_debt_to_equity_with_trend(self, balance_sheet: pd.DataFrame,
+                                             period_type: str = 'annual') -> Dict[str, Any]:
+        """Debt to Equity Ratio 계산 (시계열 포함)"""
+        try:
+            if len(balance_sheet) == 0:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            debt_keys = ['Total Debt', 'TotalDebt', 'Total Liabilities Net Minority Interest',
+                        'Total Liabilities', 'Long Term Debt', 'Short Term Debt']
+            equity_keys = ['Total Stockholder Equity', 'Stockholders Equity', 
+                          'Total Equity', 'Total Shareholders Equity']
+            
+            time_series = []
+            ratios = []
+            
+            for date_idx in balance_sheet.index:
+                total_debt = None
+                total_equity = None
+                
+                # 부채 찾기
+                for key in debt_keys:
+                    if key in balance_sheet.columns:
+                        value = balance_sheet.loc[date_idx, key]
+                        if value is not None and pd.notna(value):
+                            total_debt = value
+                            break
+                
+                # 자기자본 찾기
+                for key in equity_keys:
+                    if key in balance_sheet.columns:
+                        value = balance_sheet.loc[date_idx, key]
+                        if value is not None and pd.notna(value):
+                            total_equity = value
+                            break
+                
+                if total_debt is not None and total_equity is not None and total_equity != 0:
+                    ratio = safe_divide(total_debt, total_equity, default='N/A')
+                    if ratio != 'N/A':
+                        ratios.append(ratio)
+                        # 상태 판정: 0-1: Low, 1-2: Moderate, 2+: High
+                        status = 'Low' if ratio < 1.0 else 'Moderate' if ratio < 2.0 else 'High'
+                        time_series.append({
+                            'date': str(date_idx),
+                            'value': round(ratio, 2),
+                            'status': status,
+                            'total_debt': float(total_debt) if pd.notna(total_debt) else None,
+                            'total_equity': float(total_equity) if pd.notna(total_equity) else None
+                        })
+            
+            if not ratios:
+                return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+            
+            latest = round(ratios[0], 2)
+            status = 'Low' if latest < 1.0 else 'Moderate' if latest < 2.0 else 'High'
+            
+            return {'latest': latest, 'status': status, 'time_series': time_series}
+        except Exception:
+            return {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
+    
     def _calculate_capex_growth_with_trend(self, cashflow: pd.DataFrame,
                                           period_type: str = 'annual') -> Dict[str, Any]:
         """CapEx Growth 계산 (시계열 포함)"""
@@ -1633,6 +1762,7 @@ class StockDataManager:
                 'receivables_turnover': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
                 'inventory_turnover': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
                 'interest_coverage': {'latest': 'N/A', 'status': 'N/A', 'time_series': []},
+                'debt_to_equity': {'latest': 'N/A', 'status': 'N/A', 'time_series': []},
                 'capex_growth': {'latest': 'N/A', 'trend': 'N/A', 'time_series': []},
                 'net_buyback_yield': {'latest': 'N/A', 'status': 'N/A', 'time_series': []}
             },

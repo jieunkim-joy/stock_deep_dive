@@ -169,6 +169,10 @@ $[구체적인 가격]
 - [리스크 2]
 - [리스크 3]
 
+### AI Score
+**[0-100]**
+(전체 투자 매력도를 종합 고려하여 0-100 사이의 숫자 점수를 제공하라. 재무 건전성, 전략 적합성, 기술적 타이밍, 리스크 요인을 모두 고려하라.)
+
 ### Final Rating
 **[STRONG BUY / BUY / HOLD / SELL]**
 
@@ -245,6 +249,10 @@ $[Specific price]
 - [Risk 1]
 - [Risk 2]
 - [Risk 3]
+
+### AI Score
+**[0-100]**
+(Provide a numerical score from 0 to 100 based on overall investment attractiveness. Consider all factors: financial health, strategy fit, technical timing, and risk factors.)
 
 ### Final Rating
 **[STRONG BUY / BUY / HOLD / SELL]**
@@ -719,7 +727,7 @@ Your role combines:
     def extract_score_and_verdict(self, report: str) -> Tuple[int, str]:
         """
         리포트에서 Score와 Verdict 추출
-        리포트의 Final Rating을 기반으로 점수 계산
+        AI가 직접 제공한 점수를 우선 사용하고, 없으면 Final Rating을 기반으로 점수 계산
         
         Args:
             report: 생성된 리포트 텍스트
@@ -728,12 +736,31 @@ Your role combines:
             (score: int, verdict: str) 튜플
         """
         try:
-            
-            # Verdict 추출 (Final Rating 섹션에서 찾기)
             verdict = None
+            score = None
             report_upper = report.upper()
             
-            # "Final Rating" 섹션 찾기
+            # 1. AI Score 직접 추출 (우선순위 1)
+            ai_score_patterns = [
+                r'ai\s+score[:\*\s]*\*?\*?(\d+)\*?\*?',  # "AI Score: **85**"
+                r'ai\s+score[:\*\s]*(\d+)',  # "AI Score: 85"
+                r'score[:\*\s]*\*?\*?(\d+)\*?\*?',  # "Score: **85**"
+            ]
+            
+            for pattern in ai_score_patterns:
+                score_match = re.search(pattern, report_upper, re.IGNORECASE | re.MULTILINE)
+                if score_match:
+                    try:
+                        score = int(score_match.group(1))
+                        # 점수 범위 검증 (0-100)
+                        if 0 <= score <= 100:
+                            break
+                        else:
+                            score = None  # 범위 밖이면 무시
+                    except (ValueError, IndexError):
+                        continue
+            
+            # 2. Final Rating 추출 (Verdict 결정용)
             final_rating_match = re.search(
                 r'(?:final\s+rating|final\s+verdict)[:\*\s]*\*?\*?([A-Z\s]+)\*?\*?',
                 report_upper,
@@ -744,50 +771,49 @@ Your role combines:
                 rating_text = final_rating_match.group(1).strip()
                 if "STRONG" in rating_text and "BUY" in rating_text:
                     verdict = "🟢 STRONG BUY"
-                    score = 85
+                    if score is None:
+                        score = 85
                 elif "BUY" in rating_text:
                     verdict = "🟢 BUY"
-                    score = 70
+                    if score is None:
+                        score = 70
                 elif "HOLD" in rating_text:
                     verdict = "🟡 HOLD"
-                    score = 50
+                    if score is None:
+                        score = 50
                 elif "SELL" in rating_text:
                     verdict = "🔴 SELL"
-                    score = 30
+                    if score is None:
+                        score = 30
             else:
                 # Final Rating 섹션을 못 찾은 경우, 전체 리포트에서 검색
                 if "**STRONG BUY**" in report or "STRONG BUY" in report_upper:
                     verdict = "🟢 STRONG BUY"
-                    score = 85
+                    if score is None:
+                        score = 85
                 elif "**BUY**" in report or (report_upper.find("FINAL RATING") != -1 and "BUY" in report_upper):
                     verdict = "🟢 BUY"
-                    score = 70
+                    if score is None:
+                        score = 70
                 elif "**HOLD**" in report or "HOLD" in report_upper:
                     verdict = "🟡 HOLD"
-                    score = 50
+                    if score is None:
+                        score = 50
                 elif "**SELL**" in report or "SELL" in report_upper:
                     verdict = "🔴 SELL"
-                    score = 30
+                    if score is None:
+                        score = 30
                 else:
                     # Verdict를 찾을 수 없는 경우 기본값
                     verdict = "🟡 HOLD"
-                    score = 50
+                    if score is None:
+                        score = 50
             
-            # Confidence Level에 따라 점수 조정
-            confidence_match = re.search(
-                r'confidence\s+level[:\s]*\*?\*?([A-Z]+)\*?\*?',
-                report_upper,
-                re.IGNORECASE | re.MULTILINE
-            )
+            # 3. 점수가 여전히 None이면 기본값 설정
+            if score is None:
+                score = 50
             
-            if confidence_match:
-                confidence = confidence_match.group(1).strip()
-                if "LOW" in confidence:
-                    score -= 10
-                elif "HIGH" in confidence:
-                    score += 5
-            
-            # 점수 범위 제한
+            # 4. 점수 범위 제한 (안전장치)
             score = max(0, min(100, score))
             
             return score, verdict
