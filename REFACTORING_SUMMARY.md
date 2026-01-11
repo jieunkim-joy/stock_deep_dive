@@ -212,3 +212,4 @@ except (ValueError, TypeError):
 **작업자**: AI Assistant
 
 
+
