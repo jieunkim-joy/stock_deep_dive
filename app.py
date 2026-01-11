@@ -302,13 +302,6 @@ if st.session_state.data:
         with col_strategy:
             st.metric("Strategy", strategy)
         
-        # Beta와 Strategy 추가 행
-        col_beta, col_strategy = st.columns(2)
-        with col_beta:
-            st.metric("Beta", profile.get('beta', 'N/A'))
-        with col_strategy:
-            st.metric("Strategy", strategy)
-        
         st.markdown("---")
         
         # AI 리포트 전체 표시
